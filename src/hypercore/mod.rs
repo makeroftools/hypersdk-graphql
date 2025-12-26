@@ -4,21 +4,21 @@ pub mod http;
 pub mod types;
 pub mod ws;
 
-/// Reimport signers.
-pub use alloy::signers::local::PrivateKeySigner;
-
-use crate::{
-    Address,
-    hyperevm::{from_wei, to_wei},
-};
 use std::{fmt, hash::Hash, ops::Range};
 
 use alloy::primitives::{B128, U256, address};
+/// Reimport signers.
+pub use alloy::signers::local::PrivateKeySigner;
 use either::Either;
 use reqwest::IntoUrl;
 use rust_decimal::{Decimal, MathematicalOps};
 use serde::Deserialize;
 use url::Url;
+
+use crate::{
+    Address,
+    hyperevm::{from_wei, to_wei},
+};
 
 /// Client order id.
 pub type Cloid = B128;

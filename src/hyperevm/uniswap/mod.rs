@@ -1,10 +1,11 @@
+//! Uniswap contract calls
+
 pub mod contracts;
 pub mod prjx;
 
 use std::{
     collections::{HashMap, hash_map::Entry},
     hash::{DefaultHasher, Hash},
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 use alloy::{
@@ -17,7 +18,7 @@ use rust_decimal::{Decimal, MathematicalOps, dec, prelude::ToPrimitive};
 use crate::hyperevm::{
     Address, DynProvider, IERC20, Provider,
     uniswap::contracts::{
-        CollectParams, DecreaseLiquidityParams,
+        CollectParams,
         Factory::{self, FactoryInstance},
         NFTPositionManager,
         Pool::{self, PoolInstance, slot0Return},
