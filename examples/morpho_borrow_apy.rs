@@ -1,9 +1,9 @@
-use alloy::{primitives::FixedBytes, sol};
+use alloy::{primitives::FixedBytes, providers::Provider, sol};
 use chrono::Utc;
 use clap::Parser;
 use hypersdk::{
     Address,
-    hyperevm::{self, DynProvider},
+    hyperevm::{self, DynProvider, IERC20},
 };
 
 #[derive(Parser, Debug)]
@@ -78,13 +78,18 @@ async fn main() -> anyhow::Result<()> {
 
     let market_params = morpho.idToMarketParams(args.market_id).call().await?;
 
-    let rate = irm.borrowRateView(market_params, market).call().await?;
-    println!("borrowing rate is {rate}");
+    let (collateral, loan) = provider
+        .multicall()
+        .add(IERC20::new(market_params.collateralToken, provider.clone()).symbol())
+        .add(IERC20::new(market_params.loanToken, provider.clone()).symbol())
+        .aggregate()
+        .await?;
 
+    let rate = irm.borrowRateView(market_params, market).call().await?;
     let rate = rate.to::<u64>() as f64 / 1e18;
 
     let apy = (rate * 31_536_000f64).exp() - 1.0;
-    println!("borrow APY is {}", apy * 100.0);
+    println!("borrow APY for {loan} / {collateral} is {}", apy * 100.0);
 
     Ok(())
 }
