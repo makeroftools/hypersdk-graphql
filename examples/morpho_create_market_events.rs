@@ -118,26 +118,22 @@ async fn main() -> anyhow::Result<()> {
 
     drop(tx);
 
-    let mut markets = vec![];
+    let mut market_params = vec![];
     while let Some(create_market) = rx.recv().await {
-        markets.push((create_market, None));
+        market_params.push(create_market);
     }
 
+    let mut markets = vec![];
     let morpho = Morpho::new(args.contract_address, provider);
-    for (params, market) in markets.iter_mut() {
+    for params in &market_params {
         let data = morpho.market(params.id).call().await?;
-        *market = Some(data);
+        markets.push(data);
     }
 
-    markets.sort_by(|(_, a), (_, b)| {
-        a.as_ref()
-            .unwrap()
-            .totalBorrowAssets
-            .cmp(&b.as_ref().unwrap().totalBorrowAssets)
-    });
+    let mut markets = market_params.into_iter().zip(markets).collect::<Vec<_>>();
+    markets.sort_by(|(_, a), (_, b)| a.totalBorrowAssets.cmp(&b.totalBorrowAssets));
 
     for (params, market) in markets {
-        let market = market.unwrap();
         println!("------------");
         println!("market: {}", params.id);
         println!("collateral: {}", params.collateral_token);

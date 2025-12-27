@@ -59,7 +59,6 @@ sol! {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let _ = simple_logger::init_with_level(log::Level::Debug);
     let args = Cli::parse();
 
     println!("Connecting to RPC endpoint: {}", args.rpc_url);

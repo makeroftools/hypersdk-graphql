@@ -59,7 +59,6 @@ sol! {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let _ = simple_logger::init_with_level(log::Level::Debug);
     let args = Cli::parse();
 
     println!("Connecting to RPC endpoint: {}", args.rpc_url);
@@ -85,7 +84,7 @@ async fn main() -> anyhow::Result<()> {
     let rate = rate.to::<u64>() as f64 / 1e18;
 
     let apy = (rate * 31_536_000f64).exp() - 1.0;
-    println!("borrow APY is {}", final_rate * 100.0);
+    println!("borrow APY is {}", apy * 100.0);
 
     Ok(())
 }
