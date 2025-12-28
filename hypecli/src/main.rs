@@ -5,7 +5,7 @@ use clap::Args;
 use clap::{Parser, Subcommand};
 use enum_dispatch::enum_dispatch;
 use hypersdk::Address;
-use hypersdk::hypercore::{self, types::UserBalance};
+use hypersdk::hypercore;
 
 #[derive(Parser)]
 #[command(author, version)]
@@ -46,12 +46,20 @@ impl Run for PerpsCmd {
         let perps = core.perps().await?;
         let mut writer = tabwriter::TabWriter::new(stdout());
 
-        let _ = writeln!(&mut writer, "name\tcollateral\tindex\tsz_decimals");
+        let _ = writeln!(
+            &mut writer,
+            "name\tcollateral\tindex\tsz_decimals\tmax leverage\tisolated margin"
+        );
         for perp in perps {
             let _ = writeln!(
                 &mut writer,
-                "{}\t{}\t{}\t{}",
-                perp.name, perp.collateral, perp.index, perp.sz_decimals
+                "{}\t{}\t{}\t{}\t{}\t{}",
+                perp.name,
+                perp.collateral,
+                perp.index,
+                perp.sz_decimals,
+                perp.max_leverage,
+                perp.isolated_margin,
             );
         }
 
