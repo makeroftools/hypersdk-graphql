@@ -63,6 +63,10 @@ name = "transfer_to_spot"
 path = "examples/hypercore/transfer_to_spot.rs"
 
 [[example]]
+name = "websocket"
+path = "examples/hypercore/websocket.rs"
+
+[[example]]
 name = "morpho_borrow_apy"
 path = "examples/morpho/borrow_apy.rs"
 

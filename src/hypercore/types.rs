@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{collections::HashMap, fmt};
 
 use alloy::{
     dyn_abi::{Eip712Domain, Eip712Types, Resolver, TypedData},
@@ -70,6 +70,11 @@ pub enum Subscription {
     Trades { coin: String },
     #[display("l2Book({coin})")]
     L2Book { coin: String },
+    #[display("allMids({dex:?})")]
+    AllMids {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        dex: Option<String>,
+    },
     // L2BookDeltas { coin: String },
     #[display("orderUpdates({user})")]
     OrderUpdates { user: Address },
@@ -88,10 +93,17 @@ pub enum Incoming {
     SubscriptionResponse(Outgoing),
     Bbo(Bbo),
     L2Book(L2Book),
+    AllMids {
+        dex: Option<String>,
+        mids: HashMap<String, Decimal>,
+    },
     // L2BookDeltas(L2Book),
     Trades(Vec<Trade>),
     OrderUpdates(Vec<OrderUpdate>),
-    UserFills { user: Address, fills: Vec<Fill> },
+    UserFills {
+        user: Address,
+        fills: Vec<Fill>,
+    },
     Ping,
     Pong,
 }
