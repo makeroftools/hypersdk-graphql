@@ -9,7 +9,8 @@ use alloy::{
 use crate::hyperevm::{
     DynProvider, ERC20,
     morpho::contracts::{
-        IIrm, IMetaMorphoV1_1,
+        IIrm,
+        IMetaMorpho::{self, IMetaMorphoInstance},
         IMorpho::{self, IMorphoInstance},
         Market, MarketParams,
     },
@@ -189,11 +190,16 @@ where
         &self.provider
     }
 
+    /// Creates a MetaMorphoInstance.
+    pub fn instance(&self, address: Address) -> IMetaMorphoInstance<P> {
+        IMetaMorpho::new(address, self.provider.clone())
+    }
+
     /// Returns the pool's APY.
     ///
     /// https://github.com/morpho-org/metamorpho-v1.1/blob/main/src/MetaMorphoV1_1.sol#L796
     pub async fn apy(&self, address: Address) -> anyhow::Result<VaultApy> {
-        let meta_morpho = IMetaMorphoV1_1::new(address, self.provider.clone());
+        let meta_morpho = IMetaMorpho::new(address, self.provider.clone());
         // the vault is at the same time a token and holds balances
         let vault_erc20 = ERC20::new(address, self.provider.clone());
         let (fee, supply_queue_len, total_supply, morpho_addr) = self

@@ -59,11 +59,11 @@ transmute_this!(IMorpho::MarketParams, MarketParams);
 sol!(
     #[derive(Debug)]
     #[sol(rpc)]
-    IMetaMorphoV1_1,
+    IMetaMorpho,
     "abi/IMetaMorphoV1_1.json"
 );
 
-transmute_this!(IMetaMorphoV1_1::MarketParams, MarketParams);
+transmute_this!(IMetaMorpho::MarketParams, MarketParams);
 
 sol!(
     #[derive(Debug)]
