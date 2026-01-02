@@ -18,12 +18,11 @@ use rust_decimal::{Decimal, MathematicalOps, dec, prelude::ToPrimitive};
 use crate::hyperevm::{
     Address, DynProvider, ERC20, Provider,
     uniswap::contracts::{
-        CollectParams,
-        Factory::{self, FactoryInstance},
-        NFTPositionManager,
-        Pool::{self, PoolInstance, slot0Return},
-        QuoterV2::{self, QuoterV2Instance},
-        SwapRouter::{self, SwapRouterInstance},
+        INonfungiblePositionManager::{self, CollectParams, INonfungiblePositionManagerInstance},
+        IQuoterV2::{self, IQuoterV2Instance},
+        ISwapRouter::{self, ISwapRouterInstance},
+        IUniswapV3Factory::{self, IUniswapV3FactoryInstance},
+        IUniswapV3Pool::{self, IUniswapV3PoolInstance},
     },
 };
 
@@ -158,34 +157,39 @@ where
     }
 
     /// Returns the uniswap factory.
-    pub fn factory(&self) -> FactoryInstance<P> {
-        Factory::new(self.contracts.factory, self.provider().clone())
+    pub fn factory(&self) -> IUniswapV3FactoryInstance<P> {
+        IUniswapV3Factory::new(self.contracts.factory, self.provider().clone())
     }
 
     /// Returns the uniswap pool.
-    pub fn pool(&self, address: Address) -> PoolInstance<P> {
-        Pool::new(address, self.provider().clone())
+    pub fn pool(&self, address: Address) -> IUniswapV3PoolInstance<P> {
+        IUniswapV3Pool::new(address, self.provider().clone())
     }
 
     /// Returns the uniswap quoter.
-    pub fn quoter(&self) -> QuoterV2Instance<P> {
-        QuoterV2::new(self.contracts.quoter, self.provider().clone())
+    pub fn quoter(&self) -> IQuoterV2Instance<P> {
+        IQuoterV2::new(self.contracts.quoter, self.provider().clone())
     }
 
     /// Returns the uniswap swap router.
-    pub fn swap_router(&self) -> SwapRouterInstance<P> {
-        SwapRouter::new(self.contracts.swap_router, self.provider().clone())
+    pub fn swap_router(&self) -> ISwapRouterInstance<P> {
+        ISwapRouter::new(self.contracts.swap_router, self.provider().clone())
+    }
+
+    /// Returns the uniswap non-fungible positions manager.
+    pub fn non_fungible_position_manager(&self) -> INonfungiblePositionManagerInstance<P> {
+        INonfungiblePositionManager::new(
+            self.contracts.non_fungible_position_manager,
+            self.provider().clone(),
+        )
     }
 
     /// Load the current positions from a user.
     ///
     /// TODO: make it composable so a user could query a specific block, ...
     pub async fn positions(&self, target_address: Address) -> Result<Vec<Position>> {
-        let npm = NFTPositionManager::new(
-            self.contracts.non_fungible_position_manager,
-            self.provider.clone(),
-        );
-        let factory = Factory::new(self.contracts.factory, self.provider.clone());
+        let npm = self.non_fungible_position_manager();
+        let factory = self.factory();
 
         let position_count: U256 = npm.balanceOf(target_address).call().await?;
         let count = position_count.to::<usize>();
@@ -264,7 +268,7 @@ where
             let token0_fees = fees_in_0 / Decimal::TEN.powi(decimals0 as i64);
             let token1_fees = fees_in_1 / Decimal::TEN.powi(decimals1 as i64);
 
-            let pool = Pool::new(pool_address, self.provider.clone());
+            let pool = self.pool(pool_address);
             let slot0 = pool.slot0().call().await?;
 
             let in_range = slot0.tick <= pos.tickUpper && slot0.tick >= pos.tickLower;
@@ -300,7 +304,7 @@ where
         token1: Address,
         fee: u32,
     ) -> Result<Address> {
-        let factory = Factory::new(self.contracts.factory, self.provider.clone());
+        let factory = self.factory();
         let token0_erc = ERC20::new(token0, self.provider.clone());
         let token1_erc = ERC20::new(token1, self.provider.clone());
         let (_, _, address) = self
@@ -326,19 +330,24 @@ where
             .getPool(token0, token1, U24::from(fee))
             .call()
             .await?;
-        let pool = Pool::new(pool_address, self.provider.clone());
+        let pool = self.pool(pool_address);
         let slot0 = pool.slot0().call().await?;
         Ok(slot0.sqrtPriceX96)
     }
 
     /// Returns the pool's slot0.
-    pub async fn slot0(&self, token0: Address, token1: Address, fee: u32) -> Result<slot0Return> {
+    pub async fn slot0(
+        &self,
+        token0: Address,
+        token1: Address,
+        fee: u32,
+    ) -> Result<IUniswapV3Pool::slot0Return> {
         let factory = self.factory();
         let pool_address = factory
             .getPool(token0, token1, U24::from(fee))
             .call()
             .await?;
-        let pool = Pool::new(pool_address, self.provider.clone());
+        let pool = self.pool(pool_address);
         let ret = pool.slot0().call().await?;
         Ok(ret)
     }
@@ -365,7 +374,7 @@ where
             .aggregate()
             .await?;
 
-        let pool = Pool::new(pool_address, self.provider.clone());
+        let pool = self.pool(pool_address);
         let slot0 = pool.slot0().call().await?;
 
         Ok(sqrt_x96_to_price(
@@ -377,7 +386,7 @@ where
 
     /// Get the pool's price in a Decimal approximation.
     pub async fn pool_price_from(&self, pool_address: Address) -> Result<Decimal> {
-        let pool = Pool::new(pool_address, self.provider().clone());
+        let pool = self.pool(pool_address);
 
         let (token0, token1) = self
             .provider
@@ -398,7 +407,7 @@ where
             .aggregate()
             .await?;
 
-        let pool = Pool::new(pool_address, self.provider.clone());
+        let pool = self.pool(pool_address);
         let slot0 = pool.slot0().call().await?;
 
         Ok(sqrt_x96_to_price(
@@ -407,45 +416,4 @@ where
             decimals1 as u32,
         ))
     }
-
-    // /// Close a position.
-    // pub async fn close_position(&self, token_id: U256, owner: Address) -> Result<()> {
-    //     let npm = NFTPositionManager::new(
-    //         self.contracts.non_fungible_position_manager,
-    //         self.provider.clone(),
-    //     );
-
-    //     let position_data = npm.positions(token_id).call().await?;
-    //     if position_data.liquidity == 0 {
-    //         return Ok(());
-    //     }
-
-    //     let now_secs = SystemTime::now()
-    //         .duration_since(UNIX_EPOCH)
-    //         .unwrap()
-    //         .as_secs();
-    //     let deadline = U256::from(now_secs + 600);
-
-    //     let params = DecreaseLiquidityParams {
-    //         tokenId: token_id,
-    //         liquidity: position_data.liquidity,
-    //         amount0Min: U256::from(0),
-    //         amount1Min: U256::from(0),
-    //         deadline,
-    //     };
-
-    //     let _res = npm.decreaseLiquidity(params).from(owner).send().await?;
-    //     let max_u128: u128 = u128::MAX;
-    //     let collect_params = CollectParams {
-    //         tokenId: token_id,
-    //         recipient: owner,
-    //         amount0Max: max_u128,
-    //         amount1Max: max_u128,
-    //     };
-    //     let _res_collect = npm.collect(collect_params).from(owner).send().await?;
-
-    //     //let _res = self.npm.burn(token_id).from(owner).send().await?;
-
-    //     Ok(())
-    // }
 }

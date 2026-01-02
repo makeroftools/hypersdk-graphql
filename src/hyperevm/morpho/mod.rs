@@ -1,3 +1,5 @@
+//! Morpho helpers.
+
 use alloy::{
     primitives::{Address, FixedBytes, U256},
     providers::Provider,
@@ -7,8 +9,9 @@ use alloy::{
 use crate::hyperevm::{
     DynProvider, ERC20,
     morpho::contracts::{
-        AdaptativeCurveIrm,
-        Morpho::{self, MorphoInstance},
+        IIrm, IMetaMorphoV1_1,
+        IMorpho::{self, IMorphoInstance},
+        Market, MarketParams,
     },
 };
 
@@ -18,9 +21,9 @@ pub mod contracts;
 #[derive(Debug, Clone)]
 pub struct PoolApy {
     /// Market parameters
-    pub params: contracts::MarketParams,
+    pub params: MarketParams,
     /// Morpho Market
-    pub market: contracts::Market,
+    pub market: Market,
     /// Borrow APY
     pub borrow: f64,
     /// Supply APY
@@ -101,8 +104,8 @@ where
     }
 
     /// Returns a MorphoInstance.
-    pub fn instance(&self, address: Address) -> MorphoInstance<P> {
-        contracts::Morpho::new(address, self.provider.clone())
+    pub fn instance(&self, address: Address) -> IMorphoInstance<P> {
+        IMorpho::new(address, self.provider.clone())
     }
 
     /// Returns the pool's APY.
@@ -111,7 +114,7 @@ where
         address: Address,
         market_id: FixedBytes<32>,
     ) -> anyhow::Result<PoolApy> {
-        let morpho = contracts::Morpho::new(address, self.provider.clone());
+        let morpho = IMorpho::new(address, self.provider.clone());
         let (params, market) = self
             .provider
             .multicall()
@@ -122,15 +125,17 @@ where
         self.apy_with(params, market).await
     }
 
-    /// Returns the APY.
+    /// Returns the APY of the market.
     pub async fn apy_with(
         &self,
-        params: contracts::MarketParams,
-        market: contracts::Market,
+        params: impl Into<MarketParams>,
+        market: impl Into<Market>,
     ) -> anyhow::Result<PoolApy> {
-        let irm = AdaptativeCurveIrm::new(params.irm, self.provider.clone());
+        let params = params.into();
+        let market = market.into();
+        let irm = IIrm::new(params.irm, self.provider.clone());
         let rate = irm
-            .borrowRateView(params.clone(), market.clone())
+            .borrowRateView(params.into(), market.into())
             .call()
             .await?;
 
@@ -188,7 +193,7 @@ where
     ///
     /// https://github.com/morpho-org/metamorpho-v1.1/blob/main/src/MetaMorphoV1_1.sol#L796
     pub async fn apy(&self, address: Address) -> anyhow::Result<VaultApy> {
-        let meta_morpho = contracts::MetaMorpho::new(address, self.provider.clone());
+        let meta_morpho = IMetaMorphoV1_1::new(address, self.provider.clone());
         // the vault is at the same time a token and holds balances
         let vault_erc20 = ERC20::new(address, self.provider.clone());
         let (fee, supply_queue_len, total_supply, morpho_addr) = self
@@ -206,7 +211,7 @@ where
         let total_deposits = (total_supply / U256::from(1e18)).to::<u64>() as f64;
         let supply_queue_len = supply_queue_len.to::<usize>();
 
-        let morpho = Morpho::new(morpho_addr, self.provider.clone());
+        let morpho = IMorpho::new(morpho_addr, self.provider.clone());
 
         let mut apy = VaultApy {
             components: vec![],

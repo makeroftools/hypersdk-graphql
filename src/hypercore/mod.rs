@@ -139,6 +139,13 @@ pub struct SpotMarket {
     pub table: PriceTickTable,
 }
 
+impl SpotMarket {
+    /// Returns the symbol of the market.
+    pub fn symbol(&self) -> String {
+        format!("{}/{}", self.tokens[0].name, self.tokens[1].name)
+    }
+}
+
 impl PartialEq for SpotMarket {
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name

@@ -1,3 +1,5 @@
+use std::{sync::Arc, time::Duration};
+
 use alloy::{
     primitives::FixedBytes, providers::Provider, rpc::types::Filter, sol, sol_types::SolEvent,
 };
@@ -6,7 +8,11 @@ use hypersdk::{
     Address, U256,
     hyperevm::{self, DynProvider, ERC20},
 };
-use tokio::sync::mpsc::unbounded_channel;
+use indicatif::ProgressBar;
+use tokio::{
+    sync::{Semaphore, mpsc::unbounded_channel},
+    time::sleep,
+};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -15,7 +21,7 @@ struct Cli {
     #[arg(
         short,
         long,
-        default_value = "0x68e37de8d93d3496ae143f2e900490f6280c57cd"
+        default_value = "0x68e37dE8d93d3496ae143F2E900490f6280C57cD"
     )]
     contract_address: Address,
     /// RPC url
@@ -53,7 +59,7 @@ sol! {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let _ = simple_logger::init_with_level(log::Level::Debug);
+    let _ = simple_logger::init_with_level(log::Level::Info);
     let args = Cli::parse();
 
     println!("Connecting to RPC endpoint: {}", args.rpc_url);
@@ -71,19 +77,26 @@ async fn main() -> anyhow::Result<()> {
         lltv: U256,
     }
 
+    let bar = ProgressBar::new(current_block);
+    let semaphore = Arc::new(Semaphore::new(8));
     let (tx, mut rx) = unbounded_channel();
     for from_block in (0..current_block).step_by(100_000) {
         let provider = provider.clone();
         let tx = tx.clone();
 
+        let to_block = (from_block + 100_000).min(current_block);
         let filter = Filter::new()
             .address(args.contract_address)
             .event_signature(Morpho::CreateMarket::SIGNATURE_HASH)
             .from_block(from_block)
-            .to_block(from_block + 100_000);
+            .to_block(to_block);
 
+        let bar = bar.clone();
+        let semaphore = Arc::clone(&semaphore);
         tokio::spawn(async move {
+            let _permit = semaphore.acquire().await?;
             let logs = provider.get_logs(&filter).await?;
+            bar.inc(to_block - from_block);
             for log in logs {
                 let Some(topic0) = log.topic0() else {
                     continue;
@@ -116,6 +129,12 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    tokio::spawn(async move {
+        // after 2 seconds, add 56 permits
+        sleep(Duration::from_secs(2)).await;
+        semaphore.add_permits(56);
+    });
+
     drop(tx);
 
     let mut market_params = vec![];
@@ -123,12 +142,18 @@ async fn main() -> anyhow::Result<()> {
         market_params.push(create_market);
     }
 
+    bar.finish_and_clear();
+    let bar = ProgressBar::new(market_params.len() as u64);
+
     let mut markets = vec![];
     let morpho = Morpho::new(args.contract_address, provider);
     for params in &market_params {
         let data = morpho.market(params.id).call().await?;
         markets.push(data);
+        bar.inc(1);
     }
+
+    bar.finish_and_clear();
 
     let mut markets = market_params.into_iter().zip(markets).collect::<Vec<_>>();
     markets.sort_by(|(_, a), (_, b)| a.totalBorrowAssets.cmp(&b.totalBorrowAssets));

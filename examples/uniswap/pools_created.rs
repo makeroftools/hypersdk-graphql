@@ -1,6 +1,6 @@
 use alloy::{providers::Provider, rpc::types::Filter, sol_types::SolEvent};
 use clap::Parser;
-use hypersdk::hyperevm::{self, Address, uniswap};
+use hypersdk::hyperevm::{self, Address, uniswap::contracts::IUniswapV3Factory};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -32,13 +32,13 @@ async fn main() -> anyhow::Result<()> {
 
         let filter = Filter::new()
             .address(args.contract_address)
-            .event_signature(uniswap::contracts::Factory::PoolCreated::SIGNATURE_HASH)
+            .event_signature(IUniswapV3Factory::PoolCreated::SIGNATURE_HASH)
             .from_block(to_block)
             .to_block(from_block);
 
         let logs = provider.get_logs(&filter).await?;
         for log in logs {
-            let data = uniswap::contracts::Factory::PoolCreated::decode_log(&log.inner)?;
+            let data = IUniswapV3Factory::PoolCreated::decode_log(&log.inner)?;
             let token0 = hyperevm::ERC20::new(data.token0, provider.clone());
             let token1 = hyperevm::ERC20::new(data.token1, provider.clone());
 

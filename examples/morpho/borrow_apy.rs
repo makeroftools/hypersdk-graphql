@@ -9,11 +9,11 @@ use hypersdk::{
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
-    /// Address of the IRM contract.
+    /// Address of the morpho contract
     #[arg(
         short,
         long,
-        default_value = "0xD4a426F010986dCad727e8dd6eed44cA4A9b7483"
+        default_value = "0x68e37dE8d93d3496ae143F2E900490f6280C57cD"
     )]
     contract_address: Address,
     // Morpho market

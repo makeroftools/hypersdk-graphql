@@ -78,16 +78,24 @@ impl Run for SpotCmd {
         let markets = core.spot().await?;
         let mut writer = tabwriter::TabWriter::new(stdout());
 
-        let _ = writeln!(&mut writer, "pair\tname\tindex");
+        writeln!(
+            &mut writer,
+            "pair\tname\tindex\tbase evm address\tquote evm address"
+        )?;
         for spot in markets {
-            let _ = writeln!(
+            writeln!(
                 &mut writer,
-                "{}/{}\t{}\t{}",
-                spot.tokens[0].name, spot.tokens[1].name, spot.name, spot.index
-            );
+                "{}/{}\t{}\t{}\t{:?}\t{:?}",
+                spot.tokens[0].name,
+                spot.tokens[1].name,
+                spot.name,
+                spot.index,
+                spot.tokens[0].evm_contract,
+                spot.tokens[1].evm_contract,
+            )?;
         }
 
-        let _ = writer.flush();
+        writer.flush()?;
 
         Ok(())
     }
@@ -104,16 +112,16 @@ impl Run for SpotBalancesCmd {
         let balances = core.user_balances(self.user).await?;
         let mut writer = tabwriter::TabWriter::new(stdout());
 
-        let _ = writeln!(&mut writer, "coin\thold\ttotal");
+        writeln!(&mut writer, "coin\thold\ttotal")?;
         for balance in balances {
-            let _ = writeln!(
+            writeln!(
                 &mut writer,
                 "{}\t{}\t{}",
                 balance.coin, balance.hold, balance.total
-            );
+            )?;
         }
 
-        let _ = writer.flush();
+        writer.flush()?;
 
         Ok(())
     }

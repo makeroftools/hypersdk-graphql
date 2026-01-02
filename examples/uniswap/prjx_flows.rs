@@ -4,7 +4,7 @@ use alloy::{providers::Provider, rpc::types::Filter, sol_types::SolEvent};
 use clap::Parser;
 use hypersdk::hyperevm::{
     self, Address, ERC20,
-    uniswap::{contracts::NFTPositionManager, prjx},
+    uniswap::{contracts::INonfungiblePositionManager, prjx},
 };
 
 #[derive(Parser, Debug)]
@@ -67,8 +67,8 @@ async fn main() -> anyhow::Result<()> {
             let filter = Filter::new()
                 .address(args.contract_address)
                 .event_signature(vec![
-                    NFTPositionManager::IncreaseLiquidity::SIGNATURE_HASH,
-                    NFTPositionManager::DecreaseLiquidity::SIGNATURE_HASH,
+                    INonfungiblePositionManager::IncreaseLiquidity::SIGNATURE_HASH,
+                    INonfungiblePositionManager::DecreaseLiquidity::SIGNATURE_HASH,
                 ])
                 .topic1(pos.token_id)
                 .from_block(from_block)
@@ -77,15 +77,17 @@ async fn main() -> anyhow::Result<()> {
             let logs = provider.get_logs(&filter).await?;
             for log in logs {
                 match *log.topic0().unwrap() {
-                    NFTPositionManager::IncreaseLiquidity::SIGNATURE_HASH => {
-                        let log = NFTPositionManager::IncreaseLiquidity::decode_log(&log.inner)?;
+                    INonfungiblePositionManager::IncreaseLiquidity::SIGNATURE_HASH => {
+                        let log =
+                            INonfungiblePositionManager::IncreaseLiquidity::decode_log(&log.inner)?;
                         println!(
                             "Incresed liquidity on {} {token0}/{token1}: {} - {}",
                             log.tokenId, log.amount0, log.amount1,
                         );
                     }
-                    NFTPositionManager::DecreaseLiquidity::SIGNATURE_HASH => {
-                        let log = NFTPositionManager::DecreaseLiquidity::decode_log(&log.inner)?;
+                    INonfungiblePositionManager::DecreaseLiquidity::SIGNATURE_HASH => {
+                        let log =
+                            INonfungiblePositionManager::DecreaseLiquidity::decode_log(&log.inner)?;
                         println!(
                             "Decreased liquidity on {} {token0}/{token1}: {} - {}",
                             log.tokenId, log.amount0, log.amount1,
