@@ -142,7 +142,7 @@ struct MorphoPositionCmd {
     )]
     contract: Address,
     /// RPC endpoint
-    #[arg(short, long, default_value = "https://api.hyperliquid.xyz")]
+    #[arg(short, long, default_value = "https://rpc.hyperliquid.xyz/evm")]
     rpc_url: String,
     /// Morpho market
     #[arg(short, long)]
