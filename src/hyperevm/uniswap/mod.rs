@@ -1,4 +1,71 @@
-//! Uniswap contract calls
+//! Uniswap V3 DEX integration.
+//!
+//! This module provides a client for interacting with Uniswap V3 on HyperEVM,
+//! including querying pools, managing positions, and calculating prices.
+//!
+//! # Overview
+//!
+//! Uniswap V3 is a decentralized exchange protocol that enables:
+//! - Automated market making with concentrated liquidity
+//! - Price discovery for token pairs
+//! - Liquidity provision with custom price ranges
+//! - Flash swaps and complex trading strategies
+//!
+//! # Examples
+//!
+//! ## Query Pool Price
+//!
+//! ```no_run
+//! use hypersdk::hyperevm::uniswap::{self, Contracts};
+//! use hypersdk::Address;
+//!
+//! # async fn example() -> anyhow::Result<()> {
+//! let contracts = Contracts {
+//!     factory: "0x...".parse()?,
+//!     quoter: "0x...".parse()?,
+//!     swap_router: "0x...".parse()?,
+//!     non_fungible_position_manager: "0x...".parse()?,
+//! };
+//!
+//! let client = uniswap::Client::mainnet(contracts).await?;
+//!
+//! let token0: Address = "0x...".parse()?;
+//! let token1: Address = "0x...".parse()?;
+//! let fee = 3000; // 0.3%
+//!
+//! let price = client.get_pool_price(token0, token1, fee).await?;
+//! println!("Pool price: {}", price);
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## Query User Positions
+//!
+//! ```no_run
+//! use hypersdk::hyperevm::uniswap::{self, Contracts};
+//! use hypersdk::Address;
+//!
+//! # async fn example() -> anyhow::Result<()> {
+//! # let contracts = Contracts {
+//! #     factory: "0x...".parse()?,
+//! #     quoter: "0x...".parse()?,
+//! #     swap_router: "0x...".parse()?,
+//! #     non_fungible_position_manager: "0x...".parse()?,
+//! # };
+//! let client = uniswap::Client::mainnet(contracts).await?;
+//!
+//! let user: Address = "0x...".parse()?;
+//! let positions = client.positions(user).await?;
+//!
+//! for pos in positions {
+//!     println!("Position {}: {} / {}",
+//!         pos.token_id, pos.token0, pos.token1);
+//!     println!("  Provided: {} / {}", pos.token0_provided, pos.token1_provided);
+//!     println!("  Fees: {} / {}", pos.token0_fees, pos.token1_fees);
+//! }
+//! # Ok(())
+//! # }
+//! ```
 
 pub mod contracts;
 pub mod prjx;
@@ -26,7 +93,13 @@ use crate::hyperevm::{
     },
 };
 
-/// Uniswap fees.
+/// Standard Uniswap V3 fee tiers (in basis points).
+///
+/// Uniswap V3 supports multiple fee tiers for different volatility levels:
+/// - `100`: 0.01% (for stable pairs like USDC/USDT)
+/// - `500`: 0.05% (for less volatile pairs)
+/// - `3_000`: 0.3% (most common, for standard pairs)
+/// - `10_000`: 1% (for exotic or highly volatile pairs)
 pub const FEES: [u32; 4] = [
     100,    // 0.01%
     500,    // 0.05%
@@ -69,9 +142,25 @@ fn get_amounts_from_liquidity(
     (amount0, amount1)
 }
 
-/// Convert a price to sqrtPriceLimitX96.
+/// Converts a price to Uniswap's sqrtPriceLimitX96 format.
 ///
-/// This approach is an approximation since [`Decimal`] can't store the maximum precision.
+/// This is an approximation since [`Decimal`] can't store the full Q64.96 precision.
+///
+/// # Parameters
+///
+/// - `price`: The price to convert
+/// - `scale`: Decimal scaling factor
+///
+/// # Example
+///
+/// ```
+/// use hypersdk::hyperevm::uniswap::sqrt_price_limit_x96;
+/// use rust_decimal_macros::dec;
+///
+/// let price = dec!(2000); // e.g., ETH price
+/// let sqrt_price = sqrt_price_limit_x96(price, 18);
+/// ```
+#[must_use]
 pub fn sqrt_price_limit_x96(price: Decimal, scale: u32) -> U160 {
     let q96 = U160::from(2).pow(U160::from(96));
     let price = U160::from((price * Decimal::TEN.powi(scale as i64)).to_i128().unwrap());
@@ -80,43 +169,173 @@ pub fn sqrt_price_limit_x96(price: Decimal, scale: u32) -> U160 {
     sqrt * q96 / U160::from(10).pow(U160::from(18))
 }
 
-/// Convert an uniswap price to Decimal.
+/// Converts Uniswap's sqrtPriceX96 format to a decimal price.
 ///
-/// This approach is an approximation since [`Decimal`] can't store the maximum precision.
+/// This is an approximation since [`Decimal`] can't store the full Q64.96 precision.
+///
+/// # Parameters
+///
+/// - `sqrt_price_x96`: The sqrt price in Q64.96 format
+/// - `decimals0`: Decimals of token0
+/// - `decimals1`: Decimals of token1
+///
+/// # Returns
+///
+/// The price of token0 in terms of token1.
+///
+/// # Example
+///
+/// ```
+/// use hypersdk::hyperevm::uniswap::sqrt_x96_to_price;
+/// use hypersdk::U160;
+///
+/// # let sqrt_price_x96 = U160::from(1u64);
+/// let price = sqrt_x96_to_price(sqrt_price_x96, 18, 6);
+/// println!("Price: {}", price);
+/// ```
+#[must_use]
 pub fn sqrt_x96_to_price(sqrt_price_x96: U160, decimals0: u32, decimals1: u32) -> Decimal {
     let q96 = U160::from(2).pow(U160::from(96));
 
-    // because sqrt_price could be less than q96, we need to scale by `scale`.
+    // Scale sqrt_price to avoid precision loss
     let sqrt_price_scaled = sqrt_price_x96 * U160::from(10).pow(U160::from(decimals0));
 
     let price = (sqrt_price_scaled / q96).pow(U160::from(2));
     Decimal::from_i128_with_scale(price.to::<i128>(), decimals0 + decimals1)
 }
 
-/// Uniswap contract addresses.
+/// Uniswap V3 contract addresses.
+///
+/// Contains the addresses of the core Uniswap V3 contracts needed for interaction.
+///
+/// # Example
+///
+/// ```
+/// use hypersdk::hyperevm::uniswap::Contracts;
+/// use hypersdk::Address;
+///
+/// # fn example() -> anyhow::Result<()> {
+/// let contracts = Contracts {
+///     factory: "0x...".parse()?,
+///     quoter: "0x...".parse()?,
+///     swap_router: "0x...".parse()?,
+///     non_fungible_position_manager: "0x...".parse()?,
+/// };
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Debug, Clone, Copy)]
 pub struct Contracts {
+    /// UniswapV3Factory contract address
     pub factory: Address,
+    /// QuoterV2 contract address (for price quotes)
     pub quoter: Address,
+    /// SwapRouter contract address (for executing swaps)
     pub swap_router: Address,
+    /// NonfungiblePositionManager contract address (for LP positions)
     pub non_fungible_position_manager: Address,
-    // pub non_fungible_position_description: Address,
 }
 
-/// Uniswap position
+/// A Uniswap V3 liquidity position.
+///
+/// Represents an NFT liquidity position with token amounts and accumulated fees.
+///
+/// # Example
+///
+/// ```no_run
+/// # use hypersdk::hyperevm::uniswap::{self, Contracts};
+/// # use hypersdk::Address;
+/// # async fn example() -> anyhow::Result<()> {
+/// # let contracts = Contracts {
+/// #     factory: "0x...".parse()?, quoter: "0x...".parse()?,
+/// #     swap_router: "0x...".parse()?, non_fungible_position_manager: "0x...".parse()?,
+/// # };
+/// let client = uniswap::Client::mainnet(contracts).await?;
+/// let positions = client.positions(user_address).await?;
+///
+/// for pos in positions {
+///     if pos.in_range {
+///         println!("Active position earning fees!");
+///     }
+/// }
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Debug, Clone)]
 pub struct Position {
+    /// NFT token ID for this position
     pub token_id: U256,
+    /// First token in the pair
     pub token0: Address,
+    /// Second token in the pair
     pub token1: Address,
+    /// Amount of token0 provided as liquidity
     pub token0_provided: Decimal,
+    /// Amount of token1 provided as liquidity
     pub token1_provided: Decimal,
+    /// Accumulated fees in token0
     pub token0_fees: Decimal,
+    /// Accumulated fees in token1
     pub token1_fees: Decimal,
+    /// Whether the position is in range (actively earning fees)
     pub in_range: bool,
 }
 
-/// Uniswap client
+impl Position {
+    /// Returns whether the position is actively earning fees.
+    ///
+    /// A position is "in range" when the current pool price is within
+    /// the position's price range.
+    #[must_use]
+    #[inline]
+    pub fn is_active(&self) -> bool {
+        self.in_range
+    }
+
+    /// Returns the total value provided to the position in token0 equivalent.
+    ///
+    /// This converts token1 to token0 using the given price.
+    ///
+    /// # Parameters
+    ///
+    /// - `token1_price_in_token0`: The price of token1 in terms of token0
+    #[must_use]
+    pub fn total_value_in_token0(&self, token1_price_in_token0: Decimal) -> Decimal {
+        self.token0_provided + (self.token1_provided * token1_price_in_token0)
+    }
+
+    /// Returns the total fees earned in token0 equivalent.
+    ///
+    /// # Parameters
+    ///
+    /// - `token1_price_in_token0`: The price of token1 in terms of token0
+    #[must_use]
+    pub fn total_fees_in_token0(&self, token1_price_in_token0: Decimal) -> Decimal {
+        self.token0_fees + (self.token1_fees * token1_price_in_token0)
+    }
+}
+
+/// Client for Uniswap V3 DEX.
+///
+/// Provides methods for querying pools, positions, and executing swaps.
+///
+/// # Example
+///
+/// ```no_run
+/// use hypersdk::hyperevm::uniswap::{self, Contracts};
+///
+/// # async fn example() -> anyhow::Result<()> {
+/// let contracts = Contracts {
+///     factory: "0x...".parse()?,
+///     quoter: "0x...".parse()?,
+///     swap_router: "0x...".parse()?,
+///     non_fungible_position_manager: "0x...".parse()?,
+/// };
+///
+/// let client = uniswap::Client::mainnet(contracts).await?;
+/// # Ok(())
+/// # }
+/// ```
 pub struct Client<P>
 where
     P: Provider,

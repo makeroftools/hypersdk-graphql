@@ -1,3 +1,74 @@
+//! WebSocket client for real-time HyperCore market data.
+//!
+//! This module provides a persistent WebSocket connection that automatically
+//! reconnects on failure and manages subscriptions across reconnections.
+//!
+//! # Examples
+//!
+//! ## Subscribe to Market Data
+//!
+//! ```no_run
+//! use hypersdk::hypercore::{self, types::*};
+//! use futures::StreamExt;
+//!
+//! # async fn example() -> anyhow::Result<()> {
+//! let mut ws = hypercore::mainnet_ws();
+//!
+//! // Subscribe to trades and orderbook
+//! ws.subscribe(Subscription::Trades { coin: "BTC".into() });
+//! ws.subscribe(Subscription::L2Book { coin: "BTC".into() });
+//!
+//! while let Some(msg) = ws.next().await {
+//!     match msg {
+//!         Incoming::Trades(trades) => {
+//!             for trade in trades {
+//!                 println!("Trade: {} {} @ {}", trade.side, trade.sz, trade.px);
+//!             }
+//!         }
+//!         Incoming::L2Book(book) => {
+//!             println!("Book update: {} levels", book.levels[0].len() + book.levels[1].len());
+//!         }
+//!         _ => {}
+//!     }
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## Subscribe to User Events
+//!
+//! ```no_run
+//! use hypersdk::hypercore::{self, types::*};
+//! use hypersdk::Address;
+//! use futures::StreamExt;
+//!
+//! # async fn example() -> anyhow::Result<()> {
+//! let mut ws = hypercore::mainnet_ws();
+//! let user: Address = "0x...".parse()?;
+//!
+//! // Subscribe to order updates and fills
+//! ws.subscribe(Subscription::OrderUpdates { user });
+//! ws.subscribe(Subscription::UserFills { user });
+//!
+//! while let Some(msg) = ws.next().await {
+//!     match msg {
+//!         Incoming::OrderUpdates(updates) => {
+//!             for update in updates {
+//!                 println!("Order {}: {:?}", update.order.oid, update.status);
+//!             }
+//!         }
+//!         Incoming::UserFills { fills, .. } => {
+//!             for fill in fills {
+//!                 println!("Fill: {} @ {}", fill.sz, fill.px);
+//!             }
+//!         }
+//!         _ => {}
+//!     }
+//! }
+//! # Ok(())
+//! # }
+//! ```
+
 use std::{
     collections::HashSet,
     pin::Pin,
@@ -77,7 +148,30 @@ impl futures::Stream for Stream {
 
 type SubChannelData = (bool, Subscription);
 
-/// Persistent WebSocket connection.
+/// Persistent WebSocket connection with automatic reconnection.
+///
+/// This connection automatically handles:
+/// - Reconnection on connection failure
+/// - Re-subscription after reconnection
+/// - Periodic ping/pong to keep the connection alive
+///
+/// The connection implements `futures::Stream`, yielding [`Incoming`] messages.
+///
+/// # Example
+///
+/// ```no_run
+/// use hypersdk::hypercore::{self, types::*};
+/// use futures::StreamExt;
+///
+/// # async fn example() {
+/// let mut ws = hypercore::mainnet_ws();
+/// ws.subscribe(Subscription::Trades { coin: "BTC".into() });
+///
+/// while let Some(msg) = ws.next().await {
+///     // Handle messages
+/// }
+/// # }
+/// ```
 pub struct Connection {
     rx: UnboundedReceiver<Incoming>,
     // TODO: oneshot??
@@ -85,7 +179,19 @@ pub struct Connection {
 }
 
 impl Connection {
-    /// Creates a new reconnecting websocket connection.
+    /// Creates a new WebSocket connection to the specified URL.
+    ///
+    /// The connection starts immediately and runs in the background,
+    /// automatically reconnecting on failures.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use hypersdk::hypercore::{self, WebSocket};
+    ///
+    /// let url = hypercore::mainnet_websocket_url();
+    /// let ws = WebSocket::new(url);
+    /// ```
     pub fn new(url: Url) -> Self {
         let (tx, rx) = unbounded_channel();
         let (stx, srx) = unbounded_channel();
@@ -93,17 +199,63 @@ impl Connection {
         Self { rx, tx: stx }
     }
 
-    /// Subscribes to a topic.
+    /// Subscribes to a WebSocket channel.
+    ///
+    /// The subscription will persist across reconnections. If you're already
+    /// subscribed to this channel, this is a no-op.
+    ///
+    /// # Available Subscriptions
+    ///
+    /// - `Subscription::Trades { coin }`: Real-time trades for a market
+    /// - `Subscription::L2Book { coin }`: Order book updates for a market
+    /// - `Subscription::Bbo { coin }`: Best bid/offer for a market
+    /// - `Subscription::AllMids { dex }`: Mid prices for all markets
+    /// - `Subscription::OrderUpdates { user }`: Your order status changes
+    /// - `Subscription::UserFills { user }`: Your trade fills
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use hypersdk::hypercore::{self, types::*};
+    ///
+    /// let ws = hypercore::mainnet_ws();
+    /// ws.subscribe(Subscription::Trades { coin: "BTC".into() });
+    /// ws.subscribe(Subscription::L2Book { coin: "ETH".into() });
+    /// ```
     pub fn subscribe(&self, subscription: Subscription) {
         let _ = self.tx.send((true, subscription));
     }
 
-    /// Unsubscribes from a topic.
+    /// Unsubscribes from a WebSocket channel.
+    ///
+    /// Stops receiving updates for this subscription. Does nothing if you're
+    /// not currently subscribed to this channel.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use hypersdk::hypercore::{self, types::*};
+    ///
+    /// # let ws = hypercore::mainnet_ws();
+    /// ws.unsubscribe(Subscription::Trades { coin: "BTC".into() });
+    /// ```
     pub fn unsubscribe(&self, subscription: Subscription) {
         let _ = self.tx.send((false, subscription));
     }
 
-    /// Close the websocket connection.
+    /// Closes the WebSocket connection.
+    ///
+    /// After calling this, the connection will no longer receive messages
+    /// and cannot be reused.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use hypersdk::hypercore;
+    /// let ws = hypercore::mainnet_ws();
+    /// // ... use the connection ...
+    /// ws.close();
+    /// ```
     pub fn close(self) {
         drop(self);
     }

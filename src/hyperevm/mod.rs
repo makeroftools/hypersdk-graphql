@@ -1,6 +1,77 @@
-//! HyperEVM interaction.
+//! HyperEVM Ethereum-compatible layer.
 //!
-//! Everything related to HyperEVM and contracts.
+//! This module provides functionality for interacting with HyperEVM, Hyperliquid's
+//! Ethereum-compatible layer. You can interact with any EVM contract, with specialized
+//! support for DeFi protocols like Morpho and Uniswap.
+//!
+//! # Overview
+//!
+//! HyperEVM is built on the Alloy Ethereum library, providing:
+//! - ERC-20 token interactions
+//! - Smart contract calls
+//! - Transaction signing and submission
+//! - Event filtering and logs
+//!
+//! # Submodules
+//!
+//! - [`morpho`]: Morpho Blue lending protocol integration
+//! - [`uniswap`]: Uniswap V3 DEX integration
+//!
+//! # Examples
+//!
+//! ## Create a Provider
+//!
+//! ```no_run
+//! use hypersdk::hyperevm;
+//!
+//! # async fn example() -> anyhow::Result<()> {
+//! // Create mainnet provider
+//! let provider = hyperevm::mainnet().await?;
+//!
+//! // Get block number
+//! let block = provider.get_block_number().await?;
+//! println!("Current block: {}", block);
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## Interact with ERC-20 Tokens
+//!
+//! ```no_run
+//! use hypersdk::hyperevm::{self, ERC20, Address};
+//!
+//! # async fn example() -> anyhow::Result<()> {
+//! let provider = hyperevm::mainnet().await?;
+//! let token_address: Address = "0x...".parse()?;
+//! let token = ERC20::new(token_address, provider);
+//!
+//! // Query token info
+//! let symbol = token.symbol().call().await?;
+//! let decimals = token.decimals().call().await?;
+//! let total_supply = token.totalSupply().call().await?;
+//!
+//! println!("{} ({} decimals): {} total supply", symbol, decimals, total_supply);
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## Wei Conversions
+//!
+//! ```
+//! use hypersdk::hyperevm::{to_wei, from_wei};
+//! use hypersdk::U256;
+//! use rust_decimal_macros::dec;
+//!
+//! // Convert decimal to wei
+//! let amount = dec!(1.5);
+//! let wei = to_wei(amount, 18);
+//! assert_eq!(wei, U256::from(1_500_000_000_000_000_000u128));
+//!
+//! // Convert wei to decimal
+//! let wei = U256::from(1_500_000_000_000_000_000u128);
+//! let amount = from_wei(wei, 18);
+//! assert_eq!(amount, dec!(1.5));
+//! ```
 
 pub mod morpho;
 pub mod uniswap;
@@ -19,14 +90,23 @@ pub use alloy::{
 };
 use rust_decimal::Decimal;
 
-/// Default Hyperliquid RPC.
+/// Default HyperEVM RPC URL.
+///
+/// URL: `https://rpc.hyperliquid.xyz/evm`
 pub const DEFAULT_RPC_URL: &str = "https://rpc.hyperliquid.xyz/evm";
-/// WHYPE contract address.
+
+/// WHYPE (Wrapped HYPE) contract address on HyperEVM.
 pub const WHYPE_ADDRESS: Address = address!("0x5555555555555555555555555555555555555555");
 
-/// Custom provider trait rename
+/// Provider trait for HyperEVM.
+///
+/// This trait is implemented by all Alloy providers and ensures they can be
+/// used with HyperEVM contract interactions.
 pub trait Provider: alloy::providers::Provider<Ethereum> + Send + Clone + 'static {}
-/// Type alias for the dynamic provider.
+
+/// Dynamic provider type for HyperEVM.
+///
+/// Use this when you need type erasure for providers.
 pub type DynProvider = alloy::providers::DynProvider<Ethereum>;
 
 impl<T> Provider for T where T: alloy::providers::Provider<Ethereum> + Send + Clone + 'static {}
@@ -49,13 +129,44 @@ sol!(
     "abi/IERC777.json"
 );
 
-/// Creates a Provider for Ethereum
+/// Creates a provider for HyperEVM mainnet.
+///
+/// Connects to the default HyperEVM RPC endpoint.
+///
+/// # Example
+///
+/// ```no_run
+/// use hypersdk::hyperevm;
+///
+/// # async fn example() -> anyhow::Result<()> {
+/// let provider = hyperevm::mainnet().await?;
+/// let block = provider.get_block_number().await?;
+/// println!("Block: {}", block);
+/// # Ok(())
+/// # }
+/// ```
 #[inline(always)]
 pub async fn mainnet() -> Result<impl Provider, TransportError> {
     mainnet_with_url(DEFAULT_RPC_URL).await
 }
 
-/// Creates a RootProvider
+/// Creates a provider with a signer for HyperEVM mainnet.
+///
+/// This allows you to send transactions that modify blockchain state.
+///
+/// # Example
+///
+/// ```no_run
+/// use hypersdk::hyperevm;
+/// use alloy::signers::local::PrivateKeySigner;
+///
+/// # async fn example() -> anyhow::Result<()> {
+/// let signer: PrivateKeySigner = "your_key".parse()?;
+/// let provider = hyperevm::mainnet_with_signer(signer).await?;
+/// // Can now send transactions
+/// # Ok(())
+/// # }
+/// ```
 #[inline(always)]
 pub async fn mainnet_with_signer<S>(signer: S) -> Result<impl Provider, TransportError>
 where
@@ -65,14 +176,41 @@ where
     mainnet_with_signer_and_url(DEFAULT_RPC_URL, signer).await
 }
 
-/// Creates a RootProvider with a custom url
+/// Creates a provider with a custom RPC URL.
+///
+/// # Example
+///
+/// ```no_run
+/// use hypersdk::hyperevm;
+///
+/// # async fn example() -> anyhow::Result<()> {
+/// let provider = hyperevm::mainnet_with_url("https://custom-rpc.example.com").await?;
+/// # Ok(())
+/// # }
+/// ```
 #[inline(always)]
 pub async fn mainnet_with_url(url: &str) -> Result<impl Provider, TransportError> {
     let p = ProviderBuilder::new().connect(url).await?;
     Ok(p)
 }
 
-/// Creates a Provider with a custom url and signer
+/// Creates a provider with a custom RPC URL and signer.
+///
+/// # Example
+///
+/// ```no_run
+/// use hypersdk::hyperevm;
+/// use alloy::signers::local::PrivateKeySigner;
+///
+/// # async fn example() -> anyhow::Result<()> {
+/// let signer: PrivateKeySigner = "your_key".parse()?;
+/// let provider = hypersdk::hyperevm::mainnet_with_signer_and_url(
+///     "https://custom-rpc.example.com",
+///     signer
+/// ).await?;
+/// # Ok(())
+/// # }
+/// ```
 #[inline(always)]
 pub async fn mainnet_with_signer_and_url<S>(
     url: &str,
@@ -86,13 +224,54 @@ where
     Ok(provider)
 }
 
-/// Converts a number from Decimal to wei.
+/// Converts a decimal amount to wei representation.
+///
+/// Wei is the smallest unit of Ethereum tokens (like satoshis for Bitcoin).
+///
+/// # Parameters
+///
+/// - `size`: The decimal amount to convert
+/// - `decimals`: Number of decimal places for the token (e.g., 18 for ETH, 6 for USDC)
+///
+/// # Example
+///
+/// ```
+/// use hypersdk::hyperevm::to_wei;
+/// use hypersdk::U256;
+/// use rust_decimal_macros::dec;
+///
+/// // Convert 1.5 ETH to wei (18 decimals)
+/// let wei = to_wei(dec!(1.5), 18);
+/// assert_eq!(wei, U256::from(1_500_000_000_000_000_000u128));
+/// ```
+#[must_use]
+#[inline]
 pub fn to_wei(mut size: Decimal, decimals: u32) -> U256 {
     size.rescale(decimals);
     U256::from(size.mantissa())
 }
 
-/// Converts a number from wei to Decimal.
+/// Converts wei representation to a decimal amount.
+///
+/// # Parameters
+///
+/// - `wei`: The wei amount to convert
+/// - `decimals`: Number of decimal places for the token (e.g., 18 for ETH, 6 for USDC)
+///
+/// # Example
+///
+/// ```
+/// use hypersdk::hyperevm::from_wei;
+/// use hypersdk::U256;
+/// use rust_decimal_macros::dec;
+///
+/// // Convert 1.5 ETH (in wei) back to decimal
+/// let wei = U256::from(1_500_000_000_000_000_000u128);
+/// let amount = from_wei(wei, 18);
+/// assert_eq!(amount, dec!(1.5));
+/// ```
+#[must_use]
+#[inline]
 pub fn from_wei(wei: U256, decimals: u32) -> Decimal {
     Decimal::from_i128_with_scale(wei.to::<i128>(), decimals)
 }

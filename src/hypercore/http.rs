@@ -1,3 +1,59 @@
+//! HTTP client for HyperCore API interactions.
+//!
+//! This module provides the HTTP client for placing orders, querying balances,
+//! managing positions, and performing asset transfers on Hyperliquid.
+//!
+//! # Examples
+//!
+//! ## Query User Balances
+//!
+//! ```no_run
+//! use hypersdk::hypercore;
+//! use hypersdk::Address;
+//!
+//! # async fn example() -> anyhow::Result<()> {
+//! let client = hypercore::mainnet();
+//! let user: Address = "0x...".parse()?;
+//! let balances = client.user_balances(user).await?;
+//!
+//! for balance in balances {
+//!     println!("{}: {}", balance.coin, balance.total);
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## Place Orders
+//!
+//! ```no_run
+//! use hypersdk::hypercore::{self, types::*, PrivateKeySigner};
+//! use rust_decimal_macros::dec;
+//!
+//! # async fn example() -> anyhow::Result<()> {
+//! let client = hypercore::mainnet();
+//! let signer: PrivateKeySigner = "your_key".parse()?;
+//!
+//! let order = BatchOrder {
+//!     orders: vec![OrderRequest {
+//!         asset: 0,
+//!         is_buy: true,
+//!         limit_px: dec!(50000),
+//!         sz: dec!(0.1),
+//!         reduce_only: false,
+//!         order_type: OrderTypePlacement::Limit {
+//!             tif: TimeInForce::Gtc,
+//!         },
+//!         cloid: Default::default(),
+//!     }],
+//!     grouping: OrderGrouping::Na,
+//! };
+//!
+//! let nonce = chrono::Utc::now().timestamp_millis() as u64;
+//! let result = client.place(&signer, order, nonce, None, None).await?;
+//! # Ok(())
+//! # }
+//! ```
+
 use std::{collections::HashMap, fmt, time::Duration};
 
 use alloy::{
@@ -22,11 +78,41 @@ use crate::hypercore::{
     },
 };
 
-/// Error for a set of order ids.
-#[derive(Debug)]
+/// Error type for batch operations that failed.
+///
+/// Contains the IDs of the orders/actions that failed and the error message.
+///
+/// # Type Parameter
+///
+/// - `T`: The ID type (e.g., `Cloid`, `u64`, `OidOrCloid`)
+#[derive(Debug, Clone)]
 pub struct ActionError<T> {
-    pub ids: Vec<T>,
-    pub err: String,
+    /// The IDs of orders/actions that encountered the error
+    ids: Vec<T>,
+    /// The error message from the exchange
+    err: String,
+}
+
+impl<T> ActionError<T> {
+    /// Creates a new ActionError.
+    pub fn new(ids: Vec<T>, err: String) -> Self {
+        Self { ids, err }
+    }
+
+    /// Returns the error message.
+    pub fn message(&self) -> &str {
+        &self.err
+    }
+
+    /// Returns the failed IDs.
+    pub fn ids(&self) -> &[T] {
+        &self.ids
+    }
+
+    /// Consumes the error and returns the IDs.
+    pub fn into_ids(self) -> Vec<T> {
+        self.ids
+    }
 }
 
 impl<T> fmt::Display for ActionError<T>
@@ -40,14 +126,36 @@ where
 
 impl<T> std::error::Error for ActionError<T> where T: fmt::Display + fmt::Debug {}
 
-/// HTTP client.
+/// HTTP client for HyperCore API.
+///
+/// Provides methods for trading, querying market data, managing positions,
+/// and performing asset transfers.
+///
+/// # Example
+///
+/// ```
+/// use hypersdk::hypercore;
+///
+/// let client = hypercore::mainnet();
+/// // Use client for API calls
+/// ```
 pub struct Client {
     http_client: reqwest::Client,
     base_url: Url,
 }
 
 impl Client {
-    /// Creates a new http client.
+    /// Creates a new HTTP client with a custom base URL.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use hypersdk::hypercore::HttpClient;
+    /// use url::Url;
+    ///
+    /// let url: Url = "https://api.hyperliquid.xyz".parse().unwrap();
+    /// let client = HttpClient::new(url);
+    /// ```
     pub fn new(base_url: Url) -> Self {
         let http_client = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
@@ -61,7 +169,20 @@ impl Client {
         }
     }
 
-    /// Creates a new WebSocket connection from the hypercore client.
+    /// Creates a WebSocket connection using the same base URL as this HTTP client.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use hypersdk::hypercore;
+    /// use futures::StreamExt;
+    ///
+    /// # async fn example() {
+    /// let client = hypercore::mainnet();
+    /// let mut ws = client.websocket();
+    /// // Subscribe and process messages
+    /// # }
+    /// ```
     pub fn websocket(&self) -> super::WebSocket {
         let mut url = self.base_url.clone();
         let _ = url.set_scheme("wss");
@@ -69,7 +190,9 @@ impl Client {
         super::WebSocket::new(url)
     }
 
-    /// Creates a new WebSocket connection from the hypercore client disabling TLS.
+    /// Creates a WebSocket connection without TLS (uses `ws://` instead of `wss://`).
+    ///
+    /// Useful for testing or local development.
     pub fn websocket_no_tls(&self) -> super::WebSocket {
         let mut url = self.base_url.clone();
         let _ = url.set_scheme("ws");
@@ -77,25 +200,91 @@ impl Client {
         super::WebSocket::new(url)
     }
 
-    /// Query the perpetual future contracts.
+    /// Fetches all available perpetual futures markets.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use hypersdk::hypercore;
+    ///
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let client = hypercore::mainnet();
+    /// let perps = client.perps().await?;
+    ///
+    /// for market in perps {
+    ///     println!("{}: {}x leverage", market.name, market.max_leverage);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     #[inline(always)]
     pub async fn perps(&self) -> Result<Vec<PerpMarket>> {
         super::perp_markets(self.base_url.clone(), self.http_client.clone()).await
     }
 
-    /// Query the spot instruments.
+    /// Fetches all available spot markets.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use hypersdk::hypercore;
+    ///
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let client = hypercore::mainnet();
+    /// let spots = client.spot().await?;
+    ///
+    /// for market in spots {
+    ///     println!("{}", market.symbol());
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     #[inline(always)]
     pub async fn spot(&self) -> Result<Vec<SpotMarket>> {
         super::spot_markets(self.base_url.clone(), self.http_client.clone()).await
     }
 
-    /// Query the spot tokens.
+    /// Fetches all available spot tokens.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use hypersdk::hypercore;
+    ///
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let client = hypercore::mainnet();
+    /// let tokens = client.spot_tokens().await?;
+    ///
+    /// for token in tokens {
+    ///     println!("{}: {} decimals", token.name, token.sz_decimals);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     #[inline(always)]
     pub async fn spot_tokens(&self) -> Result<Vec<SpotToken>> {
         super::spot_tokens(self.base_url.clone(), self.http_client.clone()).await
     }
 
-    /// Returns the user's open orders.
+    /// Returns all open orders for a user.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use hypersdk::hypercore;
+    /// use hypersdk::Address;
+    ///
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let client = hypercore::mainnet();
+    /// let user: Address = "0x...".parse()?;
+    /// let orders = client.open_orders(user).await?;
+    ///
+    /// for order in orders {
+    ///     println!("{} {} @ {}", order.side, order.sz, order.limit_px);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn open_orders(&self, user: Address) -> Result<Vec<BasicOrder>> {
         let mut api_url = self.base_url.clone();
         api_url.set_path("/info");
@@ -112,7 +301,25 @@ impl Client {
         Ok(data)
     }
 
-    /// Returns all perp prices
+    /// Returns mid prices for all perpetual markets.
+    ///
+    /// Returns a map of market name to mid price.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use hypersdk::hypercore;
+    ///
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let client = hypercore::mainnet();
+    /// let mids = client.all_mids().await?;
+    ///
+    /// for (market, price) in mids {
+    ///     println!("{}: {}", market, price);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn all_mids(&self) -> Result<HashMap<String, Decimal>> {
         let mut api_url = self.base_url.clone();
         api_url.set_path("/info");
@@ -195,7 +402,27 @@ impl Client {
         })
     }
 
-    /// Retrieve user spot balances.
+    /// Retrieves spot token balances for a user.
+    ///
+    /// Returns all tokens the user holds on the spot market, including held (locked) and total amounts.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use hypersdk::hypercore;
+    /// use hypersdk::Address;
+    ///
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let client = hypercore::mainnet();
+    /// let user: Address = "0x...".parse()?;
+    /// let balances = client.user_balances(user).await?;
+    ///
+    /// for balance in balances {
+    ///     println!("{}: total={}, held={}", balance.coin, balance.total, balance.hold);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn user_balances(&self, user: Address) -> Result<Vec<UserBalance>> {
         let mut api_url = self.base_url.clone();
         api_url.set_path("/info");
@@ -247,7 +474,52 @@ impl Client {
         }
     }
 
-    /// Place a batch of orders.
+    /// Places a batch of orders.
+    ///
+    /// Submits one or more orders to the exchange. Each order must be signed with your private key.
+    ///
+    /// # Parameters
+    ///
+    /// - `signer`: Private key signer for EIP-712 signatures
+    /// - `batch`: Batch of orders to place
+    /// - `nonce`: Unique nonce (typically current timestamp in milliseconds)
+    /// - `vault_address`: Optional vault address if trading on behalf of a vault
+    /// - `expires_after`: Optional expiration timestamp for the request
+    ///
+    /// # Returns
+    ///
+    /// A future that resolves to order statuses or an error.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use hypersdk::hypercore::{self, types::*, PrivateKeySigner};
+    /// use rust_decimal_macros::dec;
+    ///
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let client = hypercore::mainnet();
+    /// let signer: PrivateKeySigner = "your_key".parse()?;
+    ///
+    /// let order = BatchOrder {
+    ///     orders: vec![OrderRequest {
+    ///         asset: 0,
+    ///         is_buy: true,
+    ///         limit_px: dec!(50000),
+    ///         sz: dec!(0.1),
+    ///         reduce_only: false,
+    ///         order_type: OrderTypePlacement::Limit {
+    ///             tif: TimeInForce::Gtc,
+    ///         },
+    ///         cloid: Default::default(),
+    ///     }],
+    ///     grouping: OrderGrouping::Na,
+    /// };
+    ///
+    /// let nonce = chrono::Utc::now().timestamp_millis() as u64;
+    /// let statuses = client.place(&signer, order, nonce, None, None).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn place<S: SignerSync>(
         &self,
         signer: &S,

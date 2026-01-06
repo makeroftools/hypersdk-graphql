@@ -1,4 +1,60 @@
-//! Morpho helpers.
+//! Morpho Blue lending protocol integration.
+//!
+//! This module provides clients for interacting with Morpho Blue, a decentralized
+//! lending protocol, and MetaMorpho vaults on HyperEVM.
+//!
+//! # Overview
+//!
+//! Morpho Blue is an efficient lending protocol that allows users to:
+//! - Supply assets to earn interest
+//! - Borrow assets with collateral
+//! - Create isolated lending markets
+//!
+//! MetaMorpho vaults aggregate multiple Morpho markets to optimize yields.
+//!
+//! # Clients
+//!
+//! - [`Client`]: For interacting with individual Morpho Blue markets
+//! - [`MetaClient`]: For interacting with MetaMorpho vaults
+//!
+//! # Examples
+//!
+//! ## Query Market APY
+//!
+//! ```no_run
+//! use hypersdk::hyperevm::morpho;
+//! use hypersdk::Address;
+//!
+//! # async fn example() -> anyhow::Result<()> {
+//! let client = morpho::Client::mainnet().await?;
+//!
+//! let morpho_addr: Address = "0x...".parse()?;
+//! let market_id = [0u8; 32].into();
+//!
+//! let apy = client.apy(morpho_addr, market_id).await?;
+//! println!("Borrow APY: {:.2}%", apy.borrow * 100.0);
+//! println!("Supply APY: {:.2}%", apy.supply * 100.0);
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## Query MetaMorpho Vault APY
+//!
+//! ```no_run
+//! use hypersdk::hyperevm::morpho;
+//! use hypersdk::Address;
+//!
+//! # async fn example() -> anyhow::Result<()> {
+//! let client = morpho::MetaClient::mainnet().await?;
+//!
+//! let vault_addr: Address = "0x...".parse()?;
+//! let vault_apy = client.apy(vault_addr).await?;
+//!
+//! println!("Vault APY: {:.2}%", vault_apy.apy() * 100.0);
+//! println!("Fee: {:.2}%", vault_apy.fee * 100.0);
+//! # Ok(())
+//! # }
+//! ```
 
 use alloy::{
     primitives::{Address, FixedBytes, U256},
@@ -18,30 +74,74 @@ use crate::hyperevm::{
 
 pub mod contracts;
 
-/// Morpho market id.
+/// Morpho market identifier.
+///
+/// A 32-byte unique identifier for a Morpho Blue market.
 pub type MarketId = FixedBytes<32>;
 
-/// Pool's APY
+/// Annual Percentage Yield (APY) for a Morpho market.
+///
+/// Contains both borrow and supply APY rates for a lending market.
+///
+/// # Example
+///
+/// ```no_run
+/// # use hypersdk::hyperevm::morpho;
+/// # async fn example() -> anyhow::Result<()> {
+/// let client = morpho::Client::mainnet().await?;
+/// let apy = client.apy(morpho_addr, market_id).await?;
+///
+/// println!("If you borrow: {:.2}% APY", apy.borrow * 100.0);
+/// println!("If you supply: {:.2}% APY", apy.supply * 100.0);
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Debug, Clone)]
 pub struct PoolApy {
-    /// Market parameters
+    /// Market parameters (loan token, collateral, oracle, IRM, LLTV)
     pub params: MarketParams,
-    /// Morpho Market
+    /// Current market state (supply, borrow, fees)
     pub market: Market,
-    /// Borrow APY
+    /// Borrow APY as a decimal (0.05 = 5%)
     pub borrow: f64,
-    /// Supply APY
+    /// Supply APY as a decimal (0.03 = 3%)
     pub supply: f64,
 }
 
-/// MetaMorpho's vault APY
+/// MetaMorpho vault APY information.
+///
+/// A MetaMorpho vault aggregates multiple Morpho markets to optimize yields.
+/// This struct contains all the information needed to calculate the vault's APY.
+///
+/// # Example
+///
+/// ```no_run
+/// # use hypersdk::hyperevm::morpho;
+/// # async fn example() -> anyhow::Result<()> {
+/// let client = morpho::MetaClient::mainnet().await?;
+/// let vault_apy = client.apy(vault_addr).await?;
+///
+/// // Calculate effective APY after fees
+/// let apy = vault_apy.apy();
+/// println!("Vault APY: {:.2}%", apy * 100.0);
+///
+/// // Examine individual markets
+/// for component in &vault_apy.components {
+///     println!("Market {}: {:.2}%",
+///         component.pool.params.loanToken,
+///         component.pool.supply * 100.0
+///     );
+/// }
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Debug, Clone)]
 pub struct VaultApy {
-    /// Markets that compose this vault.
+    /// Individual markets that compose this vault
     pub components: Vec<VaultSupply>,
-    /// Fee
+    /// Vault management fee as a decimal (0.10 = 10%)
     pub fee: f64,
-    /// Total assets deposited into the vault.
+    /// Total assets deposited into the vault
     pub total_deposits: f64,
 }
 
@@ -52,26 +152,117 @@ pub struct VaultSupply {
 }
 
 impl VaultApy {
-    /// Returns the MetaMorpho vault APY.
+    /// Calculates the effective vault APY after fees.
+    ///
+    /// This is a weighted average of all underlying market APYs, adjusted for
+    /// the vault's management fee.
+    ///
+    /// # Returns
+    ///
+    /// The APY as a decimal (e.g., 0.05 = 5%).
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use hypersdk::hyperevm::morpho;
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let client = morpho::MetaClient::mainnet().await?;
+    /// let vault_apy = client.apy(vault_addr).await?;
+    ///
+    /// println!("Vault APY: {:.2}%", vault_apy.apy() * 100.0);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
     pub fn apy(&self) -> f64 {
+        if self.total_deposits == 0.0 {
+            return 0.0;
+        }
+
         self.components
             .iter()
             .map(|component| {
-                // https://github.com/morpho-org/morpho-blue/blob/48b2a62d9d911a27f886fb7909ad57e29f7dacc9/src/libraries/SharesMathLib.sol#L20
+                // Calculate supplied shares (see Morpho SharesMathLib.sol)
                 let supplied_shares =
-                    (component.supplied_shares / U256::from(1e6)).to::<u64>() as f64;
-                // to get the supplied assets determine the price per share
-                let supplied_assets = (component.pool.market.totalSupplyAssets as f64
-                    / component.pool.market.totalSupplyShares as f64)
-                    * supplied_shares;
-                supplied_assets * component.pool.supply / self.total_deposits
+                    (component.supplied_shares / U256::from(1_000_000u64)).to::<u64>() as f64;
+
+                // Convert shares to assets using price per share
+                let price_per_share = if component.pool.market.totalSupplyShares == 0 {
+                    0.0
+                } else {
+                    component.pool.market.totalSupplyAssets as f64
+                        / component.pool.market.totalSupplyShares as f64
+                };
+
+                let supplied_assets = price_per_share * supplied_shares;
+
+                // Weight by proportion of total deposits
+                let weight = supplied_assets / self.total_deposits;
+                weight * component.pool.supply
             })
             .sum::<f64>()
             * (1.0 - self.fee)
     }
+
+    /// Returns the gross APY before fees.
+    ///
+    /// This is the weighted average APY without subtracting the management fee.
+    #[must_use]
+    pub fn gross_apy(&self) -> f64 {
+        if self.total_deposits == 0.0 {
+            return 0.0;
+        }
+
+        self.components
+            .iter()
+            .map(|component| {
+                let supplied_shares =
+                    (component.supplied_shares / U256::from(1_000_000u64)).to::<u64>() as f64;
+
+                let price_per_share = if component.pool.market.totalSupplyShares == 0 {
+                    0.0
+                } else {
+                    component.pool.market.totalSupplyAssets as f64
+                        / component.pool.market.totalSupplyShares as f64
+                };
+
+                let supplied_assets = price_per_share * supplied_shares;
+                let weight = supplied_assets / self.total_deposits;
+                weight * component.pool.supply
+            })
+            .sum()
+    }
+
+    /// Returns the number of markets in the vault.
+    #[must_use]
+    pub fn market_count(&self) -> usize {
+        self.components.len()
+    }
 }
 
-/// Morpho client
+/// Client for Morpho Blue lending markets.
+///
+/// Provides methods for querying market information and calculating APYs.
+///
+/// # Example
+///
+/// ```no_run
+/// use hypersdk::hyperevm::morpho;
+/// use hypersdk::Address;
+///
+/// # async fn example() -> anyhow::Result<()> {
+/// // Create a mainnet client
+/// let client = morpho::Client::mainnet().await?;
+///
+/// // Query a market's APY
+/// let morpho_addr: Address = "0x...".parse()?;
+/// let market_id = [0u8; 32].into();
+/// let apy = client.apy(morpho_addr, market_id).await?;
+///
+/// println!("Supply APY: {:.2}%", apy.supply * 100.0);
+/// # Ok(())
+/// # }
+/// ```
 pub struct Client<P>
 where
     P: Provider,
@@ -80,13 +271,35 @@ where
 }
 
 impl Client<DynProvider> {
-    /// Creates a client for mainnet.
+    /// Creates a client for HyperEVM mainnet.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use hypersdk::hyperevm::morpho;
+    ///
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let client = morpho::Client::mainnet().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn mainnet() -> Result<Self, TransportError> {
         let provider = DynProvider::new(super::mainnet().await?);
         Ok(Self::new(provider))
     }
 
-    /// Creates a client for mainnet.
+    /// Creates a client with a custom RPC URL.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use hypersdk::hyperevm::morpho;
+    ///
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let client = morpho::Client::mainnet_with_url("https://custom-rpc.example.com").await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn mainnet_with_url(url: &str) -> Result<Self, TransportError> {
         let provider = DynProvider::new(super::mainnet_with_url(url).await?);
         Ok(Self::new(provider))
@@ -97,22 +310,63 @@ impl<P> Client<P>
 where
     P: Provider + Clone,
 {
-    /// Create a uniswap client.
+    /// Creates a new Morpho client with a custom provider.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use hypersdk::hyperevm::{self, morpho};
+    ///
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let provider = hyperevm::mainnet().await?;
+    /// let client = morpho::Client::new(provider);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn new(provider: P) -> Self {
         Self { provider }
     }
 
-    /// Returns the root provider.
+    /// Returns a reference to the underlying provider.
     pub fn provider(&self) -> &P {
         &self.provider
     }
 
-    /// Returns a MorphoInstance.
+    /// Creates a Morpho contract instance at the given address.
+    ///
+    /// Use this to call Morpho contract methods directly.
     pub fn instance(&self, address: Address) -> IMorphoInstance<P> {
         IMorpho::new(address, self.provider.clone())
     }
 
-    /// Returns the pool's APY.
+    /// Calculates the APY for a specific Morpho market.
+    ///
+    /// # Parameters
+    ///
+    /// - `address`: The Morpho Blue contract address
+    /// - `market_id`: The unique market identifier
+    ///
+    /// # Returns
+    ///
+    /// A `PoolApy` containing borrow and supply APY rates.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use hypersdk::hyperevm::morpho;
+    /// use hypersdk::Address;
+    ///
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let client = morpho::Client::mainnet().await?;
+    /// let morpho_addr: Address = "0x...".parse()?;
+    /// let market_id = [0u8; 32].into();
+    ///
+    /// let apy = client.apy(morpho_addr, market_id).await?;
+    /// println!("Borrow: {:.2}%, Supply: {:.2}%",
+    ///     apy.borrow * 100.0, apy.supply * 100.0);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn apy(&self, address: Address, market_id: MarketId) -> anyhow::Result<PoolApy> {
         let morpho = IMorpho::new(address, self.provider.clone());
         let (params, market) = self
