@@ -97,6 +97,7 @@
 //! ```
 
 pub mod http;
+mod signing;
 pub mod types;
 pub mod ws;
 
