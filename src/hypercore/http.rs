@@ -52,7 +52,7 @@ use alloy::{
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use url::Url;
 
 use super::signing::*;
@@ -60,8 +60,8 @@ use crate::hypercore::{
     Chain, Cloid, OidOrCloid, PerpMarket, SpotMarket, SpotToken, mainnet_url, testnet_url,
     types::{
         Action, ApiResponse, BasicOrder, BatchCancel, BatchCancelCloid, BatchModify, BatchOrder,
-        Fill, OkResponse, OrderResponseStatus, OrderUpdate, ScheduleCancel, SendAsset, SendToken,
-        SpotSend, UsdSend, UserBalance,
+        Fill, InfoRequest, OkResponse, OrderResponseStatus, OrderUpdate, ScheduleCancel, SendAsset,
+        SendToken, SpotSend, UsdSend, UserBalance,
     },
 };
 
@@ -1386,28 +1386,4 @@ where
             }
         }
     }
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-#[serde(tag = "type")]
-enum InfoRequest {
-    FrontendOpenOrders {
-        user: Address,
-    },
-    HistoricalOrders {
-        user: Address,
-    },
-    UserFills {
-        user: Address,
-    },
-    OrderStatus {
-        user: Address,
-        #[serde(with = "either::serde_untagged")]
-        oid: OidOrCloid,
-    },
-    SpotClearinghouseState {
-        user: Address,
-    },
-    AllMids,
 }

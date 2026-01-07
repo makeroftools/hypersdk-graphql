@@ -20,6 +20,10 @@ struct Cli {
     #[arg(long)]
     private_key: Vec<String>,
 
+    /// Destination address
+    #[arg(long)]
+    to: Address,
+
     /// Multisig wallet address (the source of funds)
     #[arg(long)]
     multisig_address: Address,
@@ -62,9 +66,7 @@ async fn main() -> anyhow::Result<()> {
     // Create the asset transfer action
     let send_asset = SendAsset {
         // Recipient address
-        destination: "0x071749F7D58dFD985bDEA9cC14C429c530936432"
-            .parse()
-            .unwrap(),
+        destination: args.to,
         // Source DEX/balance ("" = perp, "spot" = spot)
         source_dex: "spot".to_owned(),
         // Destination DEX/balance ("" = perp, "spot" = spot)

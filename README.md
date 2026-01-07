@@ -1,6 +1,6 @@
 # hypersdk
 
-A comprehensive Rust SDK for interacting with the [Hyperliquid](https://hyperliquid.xyz) protocol.
+A comprehensive Rust SDK for interacting with the [Hyperliquid](https://app.hyperliquid.xyz) protocol.
 
 [![Crates.io](https://img.shields.io/crates/v/hypersdk.svg)](https://crates.io/crates/hypersdk)
 [![Documentation](https://docs.rs/hypersdk/badge.svg)](https://docs.rs/hypersdk)
@@ -237,22 +237,40 @@ cargo run --example uniswap_prjx_flows
 
 ## Features
 
+### Dual Signing System
+
+The SDK implements Hyperliquid's two distinct signing methods:
+
+- **RMP (MessagePack) Signing**: Used for trading operations (orders, cancellations, modifications). Actions are serialized to MessagePack, hashed with Keccak256, and signed via EIP-712.
+- **EIP-712 Typed Data Signing**: Used for asset transfers (USDC, spot tokens). More human-readable in wallet UIs.
+
+Both methods are handled transparently through the SDK's unified `Signable` trait interface.
+
 ### Price Tick Rounding
 
 The SDK includes accurate price tick size calculation for both spot and perpetual markets:
 
-- **Perpetual markets**: 5 significant figures with max 6 decimal places
-- **Spot markets**: 8 decimal places max with range-based tick sizes
+- **Perpetual markets**: 5 significant figures with max 6 decimal places (6 - sz_decimals)
+- **Spot markets**: 8 decimal places max (8 - sz_decimals) with dynamic tick sizes
+
+The tick size algorithm maintains precision: `decimals = clamp(5 - floor(log10(price)) - 1, 0, max_decimals)`
 
 ```rust
 use hypersdk::hypercore;
+use rust_decimal_macros::dec;
 
 let client = hypercore::mainnet();
 let perps = client.perps().await?;
 
 // Get BTC market and round a price
 let btc = perps.iter().find(|m| m.name == "BTC").unwrap();
-// Price 93231.23 rounds to 93231 for BTC perps
+
+// Round to valid tick size
+let rounded = btc.round_price(dec!(93231.23)); // Returns 93231
+
+// Directional rounding for order placement
+let conservative_ask = btc.round_by_side(Side::Ask, dec!(93231.4), true);  // Rounds up to 93232
+let aggressive_bid = btc.round_by_side(Side::Bid, dec!(93231.4), false);   // Rounds up to 93232
 ```
 
 ### WebSocket Subscriptions
@@ -278,7 +296,7 @@ Subscription::UserNonFundingLedgerUpdates { user } // Balance updates
 
 ### Cross-Chain Transfers
 
-Transfer assets between HyperCore and HyperEVM:
+Transfer assets between three contexts: perpetual balance, spot balance, and HyperEVM.
 
 ```rust
 use hypersdk::hypercore::{self, PrivateKeySigner};
@@ -287,21 +305,48 @@ use rust_decimal_macros::dec;
 let client = hypercore::mainnet();
 let signer: PrivateKeySigner = "your_private_key".parse()?;
 
-// Transfer to EVM
-client.transfer_to_evm(
-    &signer,
-    dec!(100.0),  // amount
-    "USDC",       // token
-    nonce
-).await?;
+// Transfer between Core and EVM
+client.transfer_to_evm(&signer, dec!(100.0), "USDC", nonce).await?;
+client.transfer_from_evm(&signer, dec!(100.0), "USDC", nonce).await?;
 
-// Transfer from EVM
-client.transfer_from_evm(
-    &signer,
-    dec!(100.0),
-    "USDC",
-    nonce
-).await?;
+// Transfer between perps and spot on Core
+client.transfer_to_perps(&signer, dec!(100.0), "USDC", nonce).await?;
+client.transfer_to_spot(&signer, dec!(100.0), "USDC", nonce).await?;
+```
+
+### Multi-Signature Support
+
+The SDK supports multi-signature operations for orders and transfers:
+
+```rust
+use hypersdk::hypercore::{self, PrivateKeySigner};
+
+let client = hypercore::mainnet();
+let signer1: PrivateKeySigner = "key1".parse()?;
+let signer2: PrivateKeySigner = "key2".parse()?;
+let signer3: PrivateKeySigner = "key3".parse()?;
+
+// Create a multi-sig order
+let result = client
+    .multi_sig()
+    .signers(vec![&signer1, &signer2, &signer3])
+    .place(order, nonce, None, None)
+    .await?;
+
+// Multi-sig transfers
+use hypersdk::hypercore::types::UsdSend;
+
+let send = UsdSend {
+    destination: "0x0...".parse()?,
+    amount: dec!(100.0),
+    time: nonce,
+};
+
+client
+    .multi_sig()
+    .signers(vec![&signer1, &signer2])
+    .send_usdc(send)
+    .await?;
 ```
 
 ## Configuration
@@ -323,6 +368,22 @@ PRIVATE_KEY=your_private_key_here
 - [API Documentation](https://docs.rs/hypersdk)
 - [Hyperliquid Documentation](https://hyperliquid.gitbook.io/hyperliquid-docs/)
 - [Examples](./examples/)
+
+## Development
+
+### Running Tests
+
+```bash
+# Run only unit tests
+cargo test --lib
+```
+
+### Building Documentation
+
+```bash
+# Build and open documentation locally
+cargo doc --open --no-deps
+```
 
 ## Requirements
 

@@ -1177,7 +1177,7 @@ pub async fn perp_markets(
     let resp = client
         .post(url)
         .json(&serde_json::json!({
-            "type": "meta"
+            "type": "meta",
         }))
         .send()
         .await

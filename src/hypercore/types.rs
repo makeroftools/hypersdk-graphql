@@ -1673,6 +1673,33 @@ pub(super) enum OkResponse {
     Default,
 }
 
+/// Info endpoint request types.
+///
+/// Used for querying various types of information from the API.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+#[serde(tag = "type")]
+pub(super) enum InfoRequest {
+    FrontendOpenOrders {
+        user: Address,
+    },
+    HistoricalOrders {
+        user: Address,
+    },
+    UserFills {
+        user: Address,
+    },
+    OrderStatus {
+        user: Address,
+        #[serde(with = "either::serde_untagged")]
+        oid: OidOrCloid,
+    },
+    SpotClearinghouseState {
+        user: Address,
+    },
+    AllMids,
+}
+
 /// Signature.
 ///
 /// Represents an EIP‑712 signature split into its components.
