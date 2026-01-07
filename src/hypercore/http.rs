@@ -57,7 +57,7 @@ use url::Url;
 
 use super::signing::*;
 use crate::hypercore::{
-    Chain, Cloid, OidOrCloid, PerpMarket, SpotMarket, SpotToken, mainnet_url, testnet_url,
+    Chain, Cloid, Dex, OidOrCloid, PerpMarket, SpotMarket, SpotToken, mainnet_url, testnet_url,
     types::{
         Action, ApiResponse, BasicOrder, BatchCancel, BatchCancelCloid, BatchModify, BatchOrder,
         Fill, InfoRequest, OkResponse, OrderResponseStatus, OrderUpdate, ScheduleCancel, SendAsset,
@@ -249,7 +249,66 @@ impl Client {
     /// ```
     #[inline(always)]
     pub async fn perps(&self) -> Result<Vec<PerpMarket>> {
-        super::perp_markets(self.base_url.clone(), self.http_client.clone()).await
+        super::perp_markets(self.base_url.clone(), self.http_client.clone(), None).await
+    }
+
+    /// Fetches perpetual markets from a specific DEX.
+    ///
+    /// Returns a list of perpetual futures markets available on the specified DEX.
+    /// Use this when you want to query markets from a specific exchange rather than
+    /// the default Hyperliquid DEX.
+    ///
+    /// # Parameters
+    ///
+    /// - `dex`: The DEX to query markets from
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use hypersdk::hypercore;
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let client = hypercore::mainnet();
+    ///
+    /// // Get available DEXes
+    /// let dexes = client.perp_dexs().await?;
+    ///
+    /// // Query markets from a specific DEX
+    /// if let Some(dex) = dexes.first() {
+    ///     let markets = client.perps_from(dex.clone()).await?;
+    ///     for market in markets {
+    ///         println!("{}: {}x leverage", market.name, market.max_leverage);
+    ///     }
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[inline(always)]
+    pub async fn perps_from(&self, dex: Dex) -> Result<Vec<PerpMarket>> {
+        super::perp_markets(self.base_url.clone(), self.http_client.clone(), Some(dex)).await
+    }
+
+    /// Fetches all available perpetual futures DEXes.
+    ///
+    /// Returns a list of all DEXes that offer perpetual futures trading on Hyperliquid.
+    /// Each DEX has a unique name and index.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use hypersdk::hypercore;
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let client = hypercore::mainnet();
+    /// let dexes = client.perp_dexs().await?;
+    ///
+    /// for dex in dexes {
+    ///     println!("DEX: {}", dex.name());
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[inline(always)]
+    pub async fn perp_dexs(&self) -> Result<Vec<Dex>> {
+        super::perp_dexs(self.base_url.clone(), self.http_client.clone()).await
     }
 
     /// Fetches all available spot markets.

@@ -62,7 +62,11 @@
 //! };
 //! ```
 
-use std::{collections::HashMap, fmt};
+use std::{
+    collections::HashMap,
+    fmt,
+    hash::{Hash, Hasher},
+};
 
 use alloy::{
     dyn_abi::{Eip712Domain, TypedData},
@@ -107,6 +111,45 @@ pub(super) const MULTISIG_MAINNET_EIP712_DOMAIN: Eip712Domain = eip712_domain! {
     chain_id: 421614,
     verifying_contract: Address::ZERO,
 };
+
+/// HIP-3 exchange.
+#[derive(Debug, Clone, derive_more::Display)]
+#[display("{name}")]
+pub struct Dex {
+    pub(super) name: String,
+    pub(super) index: usize,
+}
+
+impl Dex {
+    /// Returns the DEX name.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use hypersdk::hypercore::types::Dex;
+    /// # let dex = Dex { name: "HyperliquidDEX".into(), index: 0 };
+    /// let name = dex.name();
+    /// assert_eq!(name, "HyperliquidDEX");
+    /// ```
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+impl PartialEq for Dex {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+    }
+}
+
+impl Eq for Dex {}
+
+impl Hash for Dex {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+    }
+}
 
 /// Side for a trade or an order.
 ///
@@ -1680,6 +1723,12 @@ pub(super) enum OkResponse {
 #[serde(rename_all = "camelCase")]
 #[serde(tag = "type")]
 pub(super) enum InfoRequest {
+    Meta {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        dex: Option<String>,
+    },
+    SpotMeta,
+    PerpDexs,
     FrontendOpenOrders {
         user: Address,
     },

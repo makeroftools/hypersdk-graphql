@@ -100,9 +100,11 @@ use url::Url;
 
 use crate::{
     Address,
-    hypercore::types::Side,
     hyperevm::{from_wei, to_wei},
 };
+
+/// Re-import types.
+pub use types::*;
 
 /// Client order ID (cloid).
 ///
@@ -1051,14 +1053,7 @@ async fn raw_spot_markets(
 ) -> anyhow::Result<SpotTokens> {
     let mut url = core_url.into_url()?;
     url.set_path("/info");
-
-    let resp = client
-        .post(url)
-        .json(&serde_json::json!({
-            "type": "spotMeta"
-        }))
-        .send()
-        .await?;
+    let resp = client.post(url).json(&InfoRequest::SpotMeta).send().await?;
     Ok(resp.json().await?)
 }
 
@@ -1144,6 +1139,67 @@ pub async fn spot_markets(
     Ok(markets)
 }
 
+/// Fetches all available perpetual futures DEXes from HyperCore.
+///
+/// Returns a list of all DEXes that offer perpetual futures trading.
+/// This is a standalone function that can be used without creating a client instance.
+///
+/// # Parameters
+///
+/// - `core_url`: The HyperCore API URL (use [`mainnet_url()`] or [`testnet_url()`])
+/// - `client`: The HTTP client to use for the request
+///
+/// # Example
+///
+/// ```no_run
+/// use hypersdk::hypercore;
+///
+/// # async fn example() -> anyhow::Result<()> {
+/// let url = hypercore::mainnet_url();
+/// let client = reqwest::Client::new();
+/// let dexes = hypercore::perp_dexs(url, client).await?;
+///
+/// for dex in dexes {
+///     println!("DEX: {}", dex.name());
+/// }
+/// # Ok(())
+/// # }
+/// ```
+pub async fn perp_dexs(
+    core_url: impl IntoUrl,
+    client: reqwest::Client,
+) -> anyhow::Result<Vec<Dex>> {
+    let mut url = core_url.into_url()?;
+    url.set_path("/info");
+
+    let resp = client
+        .post(url)
+        .json(&InfoRequest::PerpDexs)
+        .send()
+        .await
+        .context("info")?;
+
+    let dexes: Vec<Option<PerpDex>> = resp.json().await?;
+    let dex_list = dexes
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, dex)| {
+            dex.map(|dex| Dex {
+                name: dex.name,
+                index,
+            })
+        })
+        .collect();
+
+    Ok(dex_list)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PerpDex {
+    name: String,
+}
+
 /// Fetches all available perpetual futures markets from HyperCore.
 ///
 /// Returns a list of all perpetual contracts with leverage, collateral, and margin information.
@@ -1167,6 +1223,7 @@ pub async fn spot_markets(
 pub async fn perp_markets(
     core_url: impl IntoUrl,
     client: reqwest::Client,
+    dex: Option<Dex>,
 ) -> anyhow::Result<Vec<PerpMarket>> {
     let mut url = core_url.into_url()?;
     url.set_path("/info");
@@ -1176,29 +1233,34 @@ pub async fn perp_markets(
 
     let resp = client
         .post(url)
-        .json(&serde_json::json!({
-            "type": "meta",
-        }))
+        .json(&InfoRequest::Meta {
+            dex: dex.as_ref().map(|dex| dex.name.clone()),
+        })
         .send()
         .await
-        .context("info")?;
+        .context("meta")?;
     let data: PerpTokens = resp.json().await?;
     let collateral = &spot.tokens[data.collateral_token];
     let collateral = SpotToken::from(collateral.clone());
+    let dex_index = dex.as_ref().map(|dex| dex.index).unwrap_or_default();
 
     let perps = data
         .universe
         .into_iter()
         .enumerate()
-        .map(|(index, perp)| PerpMarket {
-            name: perp.name,
-            index,
-            max_leverage: perp.max_leverage,
-            sz_decimals: perp.sz_decimals,
-            collateral: collateral.clone(),
-            isolated_margin: perp.only_isolated,
-            margin_mode: perp.margin_mode,
-            table: build_perp_price_ticks(perp.sz_decimals),
+        .map(|(index, perp)| {
+            // https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/asset-ids
+            let index = 100_000 * usize::from(dex.is_some()) + dex_index * 10_000 + index;
+            PerpMarket {
+                name: perp.name,
+                index,
+                max_leverage: perp.max_leverage,
+                sz_decimals: perp.sz_decimals,
+                collateral: collateral.clone(),
+                isolated_margin: perp.only_isolated,
+                margin_mode: perp.margin_mode,
+                table: build_perp_price_ticks(perp.sz_decimals),
+            }
         })
         .collect();
 
