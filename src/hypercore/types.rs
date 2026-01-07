@@ -76,7 +76,7 @@ use std::{collections::HashMap, fmt};
 
 use crate::hypercore::{
     Chain,
-    signing::{Signable, TypedDataProvider, sign_rmp},
+    signing::{Signable, sign_rmp},
 };
 use alloy::{
     dyn_abi::{Eip712Domain, Eip712Types, Resolver, TypedData},
@@ -1479,20 +1479,6 @@ pub struct UsdSend {
     pub time: u64,
 }
 
-impl TypedDataProvider for UsdSend {
-    #[inline(always)]
-    fn typed_data(&self) -> Option<TypedData> {
-        Some(get_typed_data::<solidity::UsdSend>(self, None))
-    }
-
-    fn typed_data_multisig(&self, multi_sig_user: Address, lead: Address) -> Option<TypedData> {
-        Some(get_typed_data::<solidity::multisig::UsdSend>(
-            self,
-            Some((multi_sig_user, lead)),
-        ))
-    }
-}
-
 /// Send spot tokens.
 ///
 /// <https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint#core-spot-transfer>
@@ -1517,20 +1503,6 @@ pub struct SpotSend {
     pub amount: Decimal,
     /// Current time, should match the nonce
     pub time: u64,
-}
-
-impl TypedDataProvider for SpotSend {
-    #[inline(always)]
-    fn typed_data(&self) -> Option<TypedData> {
-        Some(get_typed_data::<solidity::SpotSend>(self, None))
-    }
-
-    fn typed_data_multisig(&self, multi_sig_user: Address, lead: Address) -> Option<TypedData> {
-        Some(get_typed_data::<solidity::multisig::SpotSend>(
-            self,
-            Some((multi_sig_user, lead)),
-        ))
-    }
 }
 
 /// Send asset.
@@ -1571,28 +1543,6 @@ where
 {
     serializer.serialize_str(&format!("{:#x}", value))
 }
-
-impl TypedDataProvider for SendAsset {
-    #[inline(always)]
-    fn typed_data(&self) -> Option<TypedData> {
-        Some(get_typed_data::<solidity::SendAsset>(self, None))
-    }
-
-    fn typed_data_multisig(&self, multi_sig_user: Address, lead: Address) -> Option<TypedData> {
-        Some(get_typed_data::<solidity::multisig::SendAsset>(
-            self,
-            Some((multi_sig_user, lead)),
-        ))
-    }
-}
-
-// RMP-based actions use the default TypedDataProvider implementation (returns None)
-impl TypedDataProvider for BatchOrder {}
-impl TypedDataProvider for BatchModify {}
-impl TypedDataProvider for BatchCancel {}
-impl TypedDataProvider for BatchCancelCloid {}
-impl TypedDataProvider for ScheduleCancel {}
-impl TypedDataProvider for MultiSigAction {}
 
 /// Multi-signature action payload.
 ///
@@ -1669,29 +1619,29 @@ impl Action {
     }
 }
 
-impl TypedDataProvider for Action {
-    fn typed_data(&self) -> Option<TypedData> {
+impl Action {
+    /// Returns the typed data for multisig signing, if applicable.
+    ///
+    /// Only EIP-712 typed data actions (UsdSend, SpotSend, SendAsset) support multisig typed data.
+    /// RMP-based actions return None and use RMP hash signing instead.
+    pub(super) fn typed_data_multisig(
+        &self,
+        multi_sig_user: Address,
+        lead: Address,
+    ) -> Option<TypedData> {
         match self {
-            Action::UsdSend(inner) => inner.typed_data(),
-            Action::SpotSend(inner) => inner.typed_data(),
-            Action::SendAsset(inner) => inner.typed_data(),
-            // RMP-based actions return None
-            Action::Order(_)
-            | Action::BatchModify(_)
-            | Action::Cancel(_)
-            | Action::CancelByCloid(_)
-            | Action::ScheduleCancel(_)
-            | Action::EvmUserModify { .. }
-            | Action::MultiSig(_)
-            | Action::Noop => None,
-        }
-    }
-
-    fn typed_data_multisig(&self, multi_sig_user: Address, lead: Address) -> Option<TypedData> {
-        match self {
-            Action::UsdSend(inner) => inner.typed_data_multisig(multi_sig_user, lead),
-            Action::SpotSend(inner) => inner.typed_data_multisig(multi_sig_user, lead),
-            Action::SendAsset(inner) => inner.typed_data_multisig(multi_sig_user, lead),
+            Action::UsdSend(inner) => Some(get_typed_data::<solidity::multisig::UsdSend>(
+                inner,
+                Some((multi_sig_user, lead)),
+            )),
+            Action::SpotSend(inner) => Some(get_typed_data::<solidity::multisig::SpotSend>(
+                inner,
+                Some((multi_sig_user, lead)),
+            )),
+            Action::SendAsset(inner) => Some(get_typed_data::<solidity::multisig::SendAsset>(
+                inner,
+                Some((multi_sig_user, lead)),
+            )),
             // RMP-based actions return None
             Action::Order(_)
             | Action::BatchModify(_)
@@ -1714,6 +1664,7 @@ impl Signable for Action {
         maybe_expires_after: Option<DateTime<Utc>>,
         chain: Chain,
     ) -> anyhow::Result<ActionRequest> {
+        // Top-down delegation: Action dispatches to each variant's sign implementation
         match self {
             Action::Order(inner) => inner.sign(
                 signer,
@@ -1778,14 +1729,17 @@ impl Signable for Action {
                 maybe_expires_after,
                 chain,
             ),
-            Action::EvmUserModify { .. } | Action::Noop => sign_rmp(
-                signer,
-                self.clone(),
-                nonce,
-                maybe_vault_address,
-                maybe_expires_after,
-                chain,
-            ),
+            Action::EvmUserModify { .. } | Action::Noop => {
+                // These variants use RMP signing directly
+                sign_rmp(
+                    signer,
+                    self,
+                    nonce,
+                    maybe_vault_address,
+                    maybe_expires_after,
+                    chain,
+                )
+            }
         }
     }
 }
