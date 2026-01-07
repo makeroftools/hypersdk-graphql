@@ -61,13 +61,11 @@ use std::{
 };
 
 use alloy::{
-    dyn_abi::TypedData,
     primitives::Address,
     signers::{Signer, SignerSync},
 };
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use futures::FutureExt;
 use reqwest::header;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -503,11 +501,11 @@ impl Client {
         expires_after: Option<DateTime<Utc>>,
     ) -> Result<()> {
         let resp = self
-            .send_sign_rmp(
+            .sign_and_send(
                 signer,
-                Action::ScheduleCancel(ScheduleCancel {
+                ScheduleCancel {
                     time: Some(when.timestamp_millis() as u64),
-                }),
+                },
                 nonce,
                 vault_address,
                 expires_after,
@@ -580,13 +578,7 @@ impl Client {
     {
         let cloids: Vec<_> = batch.orders.iter().map(|req| req.cloid).collect();
 
-        let future = self.send_sign_rmp(
-            signer,
-            Action::Order(batch),
-            nonce,
-            vault_address,
-            expires_after,
-        );
+        let future = self.sign_and_send(signer, batch, nonce, vault_address, expires_after);
 
         async move {
             let resp = future.await.map_err(|err| ActionError {
@@ -617,13 +609,7 @@ impl Client {
     {
         let oids: Vec<_> = batch.cancels.iter().map(|req| req.oid).collect();
 
-        let future = self.send_sign_rmp(
-            signer,
-            Action::Cancel(batch),
-            nonce,
-            vault_address,
-            expires_after,
-        );
+        let future = self.sign_and_send(signer, batch, nonce, vault_address, expires_after);
 
         async move {
             let resp = future.await.map_err(|err| ActionError {
@@ -654,13 +640,7 @@ impl Client {
     {
         let cloids: Vec<_> = batch.cancels.iter().map(|req| req.cloid).collect();
 
-        let future = self.send_sign_rmp(
-            signer,
-            Action::CancelByCloid(batch),
-            nonce,
-            vault_address,
-            expires_after,
-        );
+        let future = self.sign_and_send(signer, batch, nonce, vault_address, expires_after);
 
         async move {
             let resp = future.await.map_err(|err| ActionError {
@@ -691,13 +671,7 @@ impl Client {
     {
         let cloids: Vec<_> = batch.modifies.iter().map(|req| req.oid).collect();
 
-        let future = self.send_sign_rmp(
-            signer,
-            Action::BatchModify(batch),
-            nonce,
-            vault_address,
-            expires_after,
-        );
+        let future = self.sign_and_send(signer, batch, nonce, vault_address, expires_after);
 
         async move {
             let resp = future.await.map_err(|err| ActionError {
@@ -824,10 +798,7 @@ impl Client {
         send: UsdSend,
         nonce: u64,
     ) -> Result<()> {
-        let typed_data = send.typed_data(&send);
-        let resp = self
-            .send_sign_eip712(signer, Action::UsdSend(send), typed_data, nonce)
-            .await?;
+        let resp = self.sign_and_send(signer, send, nonce, None, None).await?;
         match resp {
             ApiResponse::Ok(OkResponse::Default) => Ok(()),
             ApiResponse::Err(err) => {
@@ -848,8 +819,7 @@ impl Client {
         send: SendAsset,
         nonce: u64,
     ) -> impl Future<Output = Result<()>> + Send + 'static {
-        let typed_data = send.typed_data(&send);
-        let future = self.send_sign_eip712(signer, Action::SendAsset(send), typed_data, nonce);
+        let future = self.sign_and_send(signer, send, nonce, None, None);
         async move {
             let resp = future.await?;
             match resp {
@@ -867,22 +837,22 @@ impl Client {
     /// Spot <> Spot.
     ///
     /// <https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint#core-spot-transfer>
-    pub async fn spot_send<S: SignerSync>(
+    pub fn spot_send<S: SignerSync>(
         &self,
         signer: &S,
         send: SpotSend,
         nonce: u64,
-    ) -> Result<()> {
-        let typed_data = send.typed_data(&send);
-        let resp = self
-            .send_sign_eip712(signer, Action::SpotSend(send), typed_data, nonce)
-            .await?;
-        match resp {
-            ApiResponse::Ok(OkResponse::Default) => Ok(()),
-            ApiResponse::Err(err) => {
-                anyhow::bail!("spot send: {err}")
+    ) -> impl Future<Output = Result<()>> + Send + 'static {
+        let future = self.sign_and_send(signer, send, nonce, None, None);
+        async move {
+            let resp = future.await?;
+            match resp {
+                ApiResponse::Ok(OkResponse::Default) => Ok(()),
+                ApiResponse::Err(err) => {
+                    anyhow::bail!("spot send: {err}")
+                }
+                _ => anyhow::bail!("spot_send: unexpected response type: {resp:?}"),
             }
-            _ => anyhow::bail!("spot_send: unexpected response type: {resp:?}"),
         }
     }
 
@@ -896,7 +866,7 @@ impl Client {
         expires_after: Option<DateTime<Utc>>,
     ) -> Result<()> {
         let resp = self
-            .send_sign_rmp(
+            .sign_and_send(
                 signer,
                 Action::EvmUserModify {
                     using_big_blocks: toggle,
@@ -925,7 +895,7 @@ impl Client {
         expires_after: Option<DateTime<Utc>>,
     ) -> Result<()> {
         let resp = self
-            .send_sign_rmp(signer, Action::Noop, nonce, vault_address, expires_after)
+            .sign_and_send(signer, Action::Noop, nonce, vault_address, expires_after)
             .await?;
 
         match resp {
@@ -1012,18 +982,6 @@ impl Client {
         multi_sig_user: Address,
         nonce: u64,
     ) -> MultiSig<'a, S> {
-        // let multi_sig_action = multisig_collect_signatures(
-        //     lead.address(),
-        //     multi_sig_user,
-        //     signers.into_iter(),
-        //     action,
-        //     nonce,
-        //     self.chain,
-        // )?;
-
-        // self.send_sign_rmp_multisig(lead, multi_sig_action, nonce)
-        //     .await
-
         MultiSig {
             lead,
             multi_sig_user,
@@ -1033,42 +991,11 @@ impl Client {
         }
     }
 
-    /// Send a signed action hashing with typed data.
-    fn send_sign_eip712<S: SignerSync>(
+    /// Send a signed action hashing.
+    fn sign_and_send<S: SignerSync, A: Signable>(
         &self,
         signer: &S,
-        action: Action,
-        typed_data: TypedData,
-        nonce: u64,
-    ) -> impl Future<Output = Result<ApiResponse>> + Send + 'static {
-        let res = sign_eip712(signer, action, typed_data, nonce);
-
-        let http_client = self.http_client.clone();
-        let mut url = self.base_url.clone();
-        url.set_path("/exchange");
-
-        async move {
-            let req = res?;
-            let text = serde_json::to_string(&req).expect("text");
-
-            let res = http_client
-                .post(url)
-                .timeout(Duration::from_secs(5))
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(text)
-                .send()
-                .await?
-                .json()
-                .await?;
-            Ok(res)
-        }
-    }
-
-    /// Send a signed action hashing with rmp.
-    fn send_sign_rmp<S: SignerSync>(
-        &self,
-        signer: &S,
-        action: Action,
+        action: A,
         nonce: u64,
         maybe_vault_address: Option<Address>,
         maybe_expires_after: Option<DateTime<Utc>>,
@@ -1087,12 +1014,12 @@ impl Client {
 
         async move {
             let req = res?;
-            let text = serde_json::to_string(&req).expect("serde");
             let res = http_client
                 .post(url)
                 .timeout(Duration::from_secs(5))
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(text)
+                // .header(header::CONTENT_TYPE, "application/json")
+                // .body(text)
+                .json(&req)
                 .send()
                 .await?
                 .json()
@@ -1107,8 +1034,16 @@ impl Client {
         signer: &S,
         action: MultiSigAction,
         nonce: u64,
+        maybe_vault_address: Option<Address>,
+        maybe_expires_after: Option<DateTime<Utc>>,
     ) -> impl Future<Output = Result<ApiResponse>> + Send + 'static {
-        let res = sign_rmp_multisig(signer, action, nonce, None, None, self.chain);
+        let res = action.sign(
+            signer,
+            nonce,
+            maybe_vault_address,
+            maybe_expires_after,
+            self.chain,
+        );
 
         let http_client = self.http_client.clone();
         let mut url = self.base_url.clone();
@@ -1116,12 +1051,13 @@ impl Client {
 
         async move {
             let req = res?;
-            let text = serde_json::to_string(&req).context("serde_json::to_string")?;
+            // let text = serde_json::to_string(&req).context("serde_json::to_string")?;
             let res = http_client
                 .post(url)
                 .timeout(Duration::from_secs(5))
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(text)
+                // .header(header::CONTENT_TYPE, "application/json")
+                // .body(text)
+                .json(&req)
                 .send()
                 .await?
                 .json()
@@ -1164,7 +1100,7 @@ where
     {
         let cloids: Vec<_> = batch.orders.iter().map(|req| req.cloid).collect();
 
-        let res = multisig_collect_signatures(
+        let res = multisig_collect_rmp_signatures(
             self.lead.address(),
             self.multi_sig_user,
             self.signers.iter().copied(),
@@ -1173,8 +1109,13 @@ where
             self.client.chain,
         )
         .map(|action| {
-            self.client
-                .send_sign_rmp_multisig(&self.lead, action, self.nonce)
+            self.client.send_sign_rmp_multisig(
+                &self.lead,
+                action,
+                self.nonce,
+                vault_address,
+                expires_after,
+            )
         });
 
         async move {
@@ -1194,6 +1135,66 @@ where
                     ids: cloids,
                     err: format!("unexpected response type: {resp:?}"),
                 }),
+            }
+        }
+    }
+
+    /// Send USDC from the multisig account.
+    ///
+    /// This method collects signatures from all signers for a USDC transfer using EIP-712
+    /// typed data, then submits the multisig transaction to the exchange.
+    ///
+    /// # Parameters
+    ///
+    /// - `send`: The UsdSend parameters (destination, amount, etc.)
+    ///
+    /// # Returns
+    ///
+    /// A future that resolves to `Ok(())` on success or an error on failure.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use hypersdk::hypercore::types::{UsdSend, HyperliquidChain};
+    /// use rust_decimal::Decimal;
+    ///
+    /// let send = UsdSend {
+    ///     hyperliquid_chain: HyperliquidChain::Mainnet,
+    ///     signature_chain_id: "0xa4b1",
+    ///     destination: "0x...".parse()?,
+    ///     amount: Decimal::from(100),
+    ///     time: chrono::Utc::now().timestamp_millis() as u64,
+    /// };
+    ///
+    /// client
+    ///     .multi_sig(&lead_signer, multisig_address, nonce)
+    ///     .signers(&signers)
+    ///     .send_usdc(send)
+    ///     .await?;
+    /// ```
+    pub fn send_usdc(&self, send: UsdSend) -> impl Future<Output = Result<()>> + Send + 'static {
+        let typed_data = send.typed_data();
+
+        let res = multisig_collect_typed_data_signatures(
+            self.lead.address(),
+            self.multi_sig_user,
+            self.signers.iter().copied(),
+            Action::UsdSend(send),
+            typed_data,
+        )
+        .map(|action| {
+            self.client
+                .send_sign_rmp_multisig(&self.lead, action, self.nonce, None, None)
+        });
+
+        async move {
+            let future = res?;
+            let resp = future.await?;
+
+            match resp {
+                ApiResponse::Ok(OkResponse::Default) => Ok(()),
+                ApiResponse::Err(err) => anyhow::bail!("send_usdc: {err}"),
+                _ => anyhow::bail!("send_usdc: unexpected response type: {resp:?}"),
             }
         }
     }

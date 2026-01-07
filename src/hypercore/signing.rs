@@ -28,7 +28,7 @@ use crate::hypercore::{
 /// signing method (RMP or EIP-712).
 pub(super) trait Signable {
     fn sign<S: SignerSync>(
-        &self,
+        self,
         signer: &S,
         nonce: u64,
         maybe_vault_address: Option<Address>,
@@ -40,7 +40,7 @@ pub(super) trait Signable {
 // Implement Signable for actions that use sign_rmp (MessagePack hashing)
 impl Signable for BatchOrder {
     fn sign<S: SignerSync>(
-        &self,
+        self,
         signer: &S,
         nonce: u64,
         maybe_vault_address: Option<Address>,
@@ -49,7 +49,7 @@ impl Signable for BatchOrder {
     ) -> Result<ActionRequest> {
         sign_rmp(
             signer,
-            Action::Order(self.clone()),
+            Action::Order(self),
             nonce,
             maybe_vault_address,
             maybe_expires_after,
@@ -60,7 +60,7 @@ impl Signable for BatchOrder {
 
 impl Signable for BatchModify {
     fn sign<S: SignerSync>(
-        &self,
+        self,
         signer: &S,
         nonce: u64,
         maybe_vault_address: Option<Address>,
@@ -69,7 +69,7 @@ impl Signable for BatchModify {
     ) -> Result<ActionRequest> {
         sign_rmp(
             signer,
-            Action::BatchModify(self.clone()),
+            Action::BatchModify(self),
             nonce,
             maybe_vault_address,
             maybe_expires_after,
@@ -80,7 +80,7 @@ impl Signable for BatchModify {
 
 impl Signable for BatchCancel {
     fn sign<S: SignerSync>(
-        &self,
+        self,
         signer: &S,
         nonce: u64,
         maybe_vault_address: Option<Address>,
@@ -89,7 +89,7 @@ impl Signable for BatchCancel {
     ) -> Result<ActionRequest> {
         sign_rmp(
             signer,
-            Action::Cancel(self.clone()),
+            Action::Cancel(self),
             nonce,
             maybe_vault_address,
             maybe_expires_after,
@@ -100,7 +100,7 @@ impl Signable for BatchCancel {
 
 impl Signable for BatchCancelCloid {
     fn sign<S: SignerSync>(
-        &self,
+        self,
         signer: &S,
         nonce: u64,
         maybe_vault_address: Option<Address>,
@@ -109,7 +109,7 @@ impl Signable for BatchCancelCloid {
     ) -> Result<ActionRequest> {
         sign_rmp(
             signer,
-            Action::CancelByCloid(self.clone()),
+            Action::CancelByCloid(self),
             nonce,
             maybe_vault_address,
             maybe_expires_after,
@@ -120,7 +120,7 @@ impl Signable for BatchCancelCloid {
 
 impl Signable for ScheduleCancel {
     fn sign<S: SignerSync>(
-        &self,
+        self,
         signer: &S,
         nonce: u64,
         maybe_vault_address: Option<Address>,
@@ -129,7 +129,7 @@ impl Signable for ScheduleCancel {
     ) -> Result<ActionRequest> {
         sign_rmp(
             signer,
-            Action::ScheduleCancel(self.clone()),
+            Action::ScheduleCancel(self),
             nonce,
             maybe_vault_address,
             maybe_expires_after,
@@ -141,58 +141,58 @@ impl Signable for ScheduleCancel {
 // Implement Signable for actions that use sign_eip712 (EIP-712 typed data)
 impl Signable for UsdSend {
     fn sign<S: SignerSync>(
-        &self,
+        self,
         signer: &S,
         nonce: u64,
         _maybe_vault_address: Option<Address>,
         _maybe_expires_after: Option<DateTime<Utc>>,
         _chain: Chain,
     ) -> Result<ActionRequest> {
-        let typed_data = self.typed_data(self);
-        sign_eip712(signer, Action::UsdSend(self.clone()), typed_data, nonce)
+        let typed_data = self.typed_data();
+        sign_eip712(signer, Action::UsdSend(self), typed_data, nonce)
     }
 }
 
 impl Signable for SendAsset {
     fn sign<S: SignerSync>(
-        &self,
+        self,
         signer: &S,
         nonce: u64,
         _maybe_vault_address: Option<Address>,
         _maybe_expires_after: Option<DateTime<Utc>>,
         _chain: Chain,
     ) -> Result<ActionRequest> {
-        let typed_data = self.typed_data(self);
-        sign_eip712(signer, Action::SendAsset(self.clone()), typed_data, nonce)
+        let typed_data = self.typed_data();
+        sign_eip712(signer, Action::SendAsset(self), typed_data, nonce)
     }
 }
 
 impl Signable for SpotSend {
     fn sign<S: SignerSync>(
-        &self,
+        self,
         signer: &S,
         nonce: u64,
         _maybe_vault_address: Option<Address>,
         _maybe_expires_after: Option<DateTime<Utc>>,
         _chain: Chain,
     ) -> Result<ActionRequest> {
-        let typed_data = self.typed_data(self);
-        sign_eip712(signer, Action::SpotSend(self.clone()), typed_data, nonce)
+        let typed_data = self.typed_data();
+        sign_eip712(signer, Action::SpotSend(self), typed_data, nonce)
     }
 }
 
 impl Signable for MultiSigAction {
     fn sign<S: SignerSync>(
-        &self,
+        self,
         signer: &S,
         nonce: u64,
         maybe_vault_address: Option<Address>,
         maybe_expires_after: Option<DateTime<Utc>>,
         chain: Chain,
     ) -> Result<ActionRequest> {
-        sign_rmp_multisig(
+        multisig_lead_msg(
             signer,
-            self.clone(),
+            self,
             nonce,
             maybe_vault_address,
             maybe_expires_after,
@@ -281,7 +281,7 @@ pub(super) fn sign_l1_action<S: SignerSync>(
 /// - `nonce`: Unique transaction nonce
 /// - `maybe_vault_address`: Optional vault address if trading on behalf of a vault
 /// - `maybe_expires_after`: Optional expiration time for the request
-pub(super) fn sign_rmp_multisig<S: SignerSync>(
+pub(super) fn multisig_lead_msg<S: SignerSync>(
     signer: &S,
     action: MultiSigAction,
     nonce: u64,
@@ -322,11 +322,14 @@ pub(super) fn sign_rmp_multisig<S: SignerSync>(
     })
 }
 
-/// Collects signatures from all signers for a multisig action.
+/// Collects signatures from all signers for a multisig action using RMP (MessagePack) hashing.
 ///
-/// This function implements the Hyperliquid multisig signature collection protocol:
+/// This function implements the Hyperliquid multisig signature collection protocol for actions
+/// that use MessagePack serialization (orders, cancels, modifications, etc).
 ///
-/// 1. Creates an action hash from: `[multisig_user, lead_signer, action]`
+/// # Process
+///
+/// 1. Creates an action hash from: `[multisig_user, lead_signer, action]` using RMP hashing
 /// 2. Each signer signs the action hash using EIP-712 with the L1 Agent domain
 /// 3. All signatures are collected and packaged into a `MultiSigAction`
 ///
@@ -335,23 +338,23 @@ pub(super) fn sign_rmp_multisig<S: SignerSync>(
 /// Both the multisig user address and lead signer address are normalized to lowercase
 /// before hashing. This ensures consistency across different address representations.
 ///
-/// # Signature Collection
+/// # Parameters
 ///
-/// Each signer must sign the same action hash. The order of signatures typically matches
-/// the order of signers in the multisig wallet configuration, though the exact requirements
-/// depend on the wallet's setup on Hyperliquid.
+/// - `lead`: The lead signer who will submit the transaction
+/// - `multi_sig_user`: The multisig account address
+/// - `signers`: Iterator of signers who will sign the action
+/// - `inner_action`: The action to be signed (Order, Cancel, etc.)
+/// - `nonce`: Unique transaction nonce
+/// - `chain`: The chain (mainnet/testnet)
 ///
 /// # Returns
 ///
-/// A `MultiSigAction` containing:
-/// - All collected signatures
-/// - The signature chain ID (always uses mainnet multisig chain ID)
-/// - The payload with multisig address, lead signer, and the action
+/// A `MultiSigAction` containing all collected signatures and the action payload.
 ///
 /// # Reference
 ///
 /// Based on: https://github.com/hyperliquid-dex/hyperliquid-python-sdk/blob/be7523d58297a93d0e938063460c14ae45e9034f/hyperliquid/utils/signing.py#L293
-pub(super) fn multisig_collect_signatures<'a, S: SignerSync + Signer + 'a>(
+pub(super) fn multisig_collect_rmp_signatures<'a, S: SignerSync + Signer + 'a>(
     lead: Address,
     multi_sig_user: Address,
     signers: impl Iterator<Item = &'a S>,
@@ -372,9 +375,93 @@ pub(super) fn multisig_collect_signatures<'a, S: SignerSync + Signer + 'a>(
 
     // Collect a signature from each signer for the action hash
     for signer in signers {
-        // TODO: abstract so we can support TypedData
         let sig = sign_l1_action(signer, chain, action_hash)?;
         signatures.push(sig);
+    }
+
+    Ok(MultiSigAction {
+        signature_chain_id: MAINNET_MULTISIG_CHAIN_ID,
+        signatures,
+        payload: MultiSigPayload {
+            multi_sig_user,
+            outer_signer: lead,
+            action: Box::new(inner_action),
+        },
+    })
+}
+
+/// Collects signatures from all signers for a multisig action using EIP-712 typed data.
+///
+/// This function implements the Hyperliquid multisig signature collection protocol for actions
+/// that use EIP-712 typed data (UsdSend, SpotSend, SendAsset, etc).
+///
+/// # Process
+///
+/// 1. Creates typed data from the inner action (e.g., UsdSend, SpotSend)
+/// 2. Each signer signs the typed data directly using EIP-712
+/// 3. All signatures are collected and packaged into a `MultiSigAction`
+///
+/// # Address Normalization
+///
+/// Both the multisig user address and lead signer address are normalized to lowercase
+/// for consistency with the RMP signature collection method.
+///
+/// # Parameters
+///
+/// - `lead`: The lead signer who will submit the transaction
+/// - `multi_sig_user`: The multisig account address
+/// - `signers`: Iterator of signers who will sign the action
+/// - `inner_action`: The action to be signed (UsdSend, SpotSend, SendAsset)
+/// - `typed_data`: The EIP-712 typed data structure for the action
+///
+/// # Returns
+///
+/// A `MultiSigAction` containing all collected signatures and the action payload.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use hypersdk::hypercore::types::{UsdSend, HyperliquidChain};
+/// use hypersdk::hypercore::signing::multisig_collect_typed_data_signatures;
+/// use rust_decimal::Decimal;
+///
+/// let usd_send = UsdSend {
+///     hyperliquid_chain: HyperliquidChain::Mainnet,
+///     signature_chain_id: "0xa4b1",
+///     destination: "0x...".parse()?,
+///     amount: Decimal::from(100),
+///     time: 1234567890,
+/// };
+///
+/// let typed_data = usd_send.typed_data(&usd_send);
+/// let action = Action::UsdSend(usd_send);
+///
+/// let multisig_action = multisig_collect_typed_data_signatures(
+///     lead_address,
+///     multisig_address,
+///     signers.iter(),
+///     action,
+///     typed_data,
+/// )?;
+/// ```
+pub(super) fn multisig_collect_typed_data_signatures<'a, S: SignerSync + Signer + 'a>(
+    lead: Address,
+    multi_sig_user: Address,
+    signers: impl Iterator<Item = &'a S>,
+    inner_action: Action,
+    typed_data: TypedData,
+) -> Result<MultiSigAction> {
+    // Collect signatures from all signers
+    let mut signatures = vec![];
+
+    // Normalize addresses to lowercase for consistency
+    let lead = lead.to_string().to_lowercase();
+    let multi_sig_user = multi_sig_user.to_string().to_lowercase();
+
+    // Each signer signs the typed data directly
+    for signer in signers {
+        let sig = signer.sign_dynamic_typed_data_sync(&typed_data)?;
+        signatures.push(sig.into());
     }
 
     Ok(MultiSigAction {
@@ -417,7 +504,7 @@ mod tests {
             amount: rust_decimal::Decimal::ONE,
             time: 1690393044548,
         };
-        let typed_data = usd_send.typed_data(&usd_send);
+        let typed_data = usd_send.typed_data();
         let signature = signer.sign_dynamic_typed_data_sync(&typed_data).unwrap();
 
         let expected_sig = "0xeca6267bcaadc4c0ae1aed73f5a2c45fcdbb7271f2e9356992404e5d4bad75a3572e08fe93f17755abadb7f84be7d1e9c4ce48bb5633e339bc430c672d5a20ed1b";

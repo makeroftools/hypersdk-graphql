@@ -1480,8 +1480,8 @@ pub struct UsdSend {
 
 impl UsdSend {
     #[inline(always)]
-    pub(super) fn typed_data(&self, msg: &impl Serialize) -> TypedData {
-        get_typed_data::<solidity::UsdSend>(msg)
+    pub(super) fn typed_data(&self) -> TypedData {
+        get_typed_data::<solidity::UsdSend>(self)
     }
 }
 
@@ -1512,8 +1512,8 @@ pub struct SpotSend {
 
 impl SpotSend {
     #[inline(always)]
-    pub(super) fn typed_data(&self, msg: &impl Serialize) -> TypedData {
-        get_typed_data::<solidity::SpotSend>(msg)
+    pub(super) fn typed_data(&self) -> TypedData {
+        get_typed_data::<solidity::SpotSend>(self)
     }
 }
 
@@ -1550,8 +1550,8 @@ pub struct SendAsset {
 
 impl SendAsset {
     #[inline(always)]
-    pub(super) fn typed_data(&self, msg: &impl Serialize) -> TypedData {
-        get_typed_data::<solidity::SendAsset>(msg)
+    pub(super) fn typed_data(&self) -> TypedData {
+        get_typed_data::<solidity::SendAsset>(self)
     }
 }
 
@@ -1644,7 +1644,7 @@ impl Action {
 
 impl Signable for Action {
     fn sign<S: SignerSync>(
-        &self,
+        self,
         signer: &S,
         nonce: u64,
         maybe_vault_address: Option<Address>,
