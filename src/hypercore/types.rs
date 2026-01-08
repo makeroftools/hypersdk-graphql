@@ -1497,7 +1497,7 @@ impl OrderResponseStatus {
 ///
 /// ```no_run
 /// use hypersdk::hypercore::types::*;
-/// use rust_decimal_macros::dec;
+/// use rust_decimal::dec;
 ///
 /// let order = BatchOrder {
 ///     orders: vec![

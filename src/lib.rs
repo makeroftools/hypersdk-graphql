@@ -37,6 +37,7 @@
 //! ```toml
 //! [dependencies]
 //! hypersdk = "0.1"
+//! rust_decimal = "1.39"
 //! tokio = { version = "1", features = ["full"] }
 //! anyhow = "1"
 //! ```
@@ -62,7 +63,7 @@
 //!
 //! ```no_run
 //! use hypersdk::hypercore::{self, types::*, PrivateKeySigner};
-//! use rust_decimal_macros::dec;
+//! use rust_decimal::dec;
 //!
 //! # async fn example() -> anyhow::Result<()> {
 //! let client = hypercore::mainnet();
