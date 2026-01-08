@@ -1,3 +1,51 @@
+//! Monitor Uniswap V3 pool creation events on HyperEVM.
+//!
+//! This example scans the blockchain for Uniswap V3 PoolCreated events and displays
+//! information about each newly created liquidity pool. It's useful for tracking new
+//! trading pairs, market making opportunities, or DEX analytics.
+//!
+//! # Usage
+//!
+//! ```bash
+//! # Using default settings (localhost RPC)
+//! cargo run --example pools_created
+//!
+//! # Using Hyperliquid public RPC
+//! cargo run --example pools_created -- \
+//!   --rpc-url https://rpc.hyperliquid.xyz/evm
+//!
+//! # Custom Uniswap factory address
+//! cargo run --example pools_created -- \
+//!   --contract-address 0x... \
+//!   --rpc-url https://rpc.hyperliquid.xyz/evm
+//! ```
+//!
+//! # What it does
+//!
+//! 1. Connects to HyperEVM via RPC
+//! 2. Scans blockchain in 100,000 block chunks (from current back to block 4M)
+//! 3. Filters for Uniswap V3 PoolCreated events
+//! 4. Resolves token symbols using ERC20 contract calls
+//! 5. Displays pool details including address, fee tier, and token pair
+//!
+//! # Output
+//!
+//! ```text
+//! Pool: 0x1234...
+//! Address: 0x5678...
+//! Fee: 3000
+//! Token0: USDC
+//! Token1: WETH
+//! ----
+//! ```
+//!
+//! # Fee Tiers
+//!
+//! - 100: 0.01% (for stablecoin pairs)
+//! - 500: 0.05% (for low volatility pairs)
+//! - 3000: 0.3% (standard fee tier)
+//! - 10000: 1% (for exotic/high volatility pairs)
+
 use alloy::{providers::Provider, rpc::types::Filter, sol_types::SolEvent};
 use clap::Parser;
 use hypersdk::hyperevm::{self, Address, uniswap::contracts::IUniswapV3Factory};

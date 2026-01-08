@@ -1,3 +1,48 @@
+//! Query supply and borrow APY for a specific Morpho market.
+//!
+//! This example fetches both supply APY (what lenders earn) and borrow APY (what borrowers pay)
+//! for a specific Morpho lending market. It's useful for lenders comparing yield opportunities
+//! or building lending aggregators.
+//!
+//! # Usage
+//!
+//! ```bash
+//! # Query APYs for a specific market
+//! cargo run --example supply_apy -- \
+//!   --market-id 0xabcd...1234 \
+//!   --rpc-url https://rpc.hyperliquid.xyz/evm
+//!
+//! # Custom IRM contract address
+//! cargo run --example supply_apy -- \
+//!   --contract-address 0x... \
+//!   --market-id 0x... \
+//!   --rpc-url https://rpc.hyperliquid.xyz/evm
+//! ```
+//!
+//! # What it does
+//!
+//! 1. Connects to HyperEVM via RPC
+//! 2. Fetches market state from Morpho contract
+//! 3. Queries Interest Rate Model (IRM) for current rates
+//! 4. Calculates both supply and borrow APY
+//! 5. Displays rates and last update timestamp
+//!
+//! # Output
+//!
+//! ```text
+//! Connecting to RPC endpoint: https://rpc.hyperliquid.xyz/evm
+//! market params last updated at 2024-01-08 12:34:56 UTC
+//! borrow APY is 5.23
+//! supply APY is 4.15
+//! ```
+//!
+//! # Understanding APY
+//!
+//! - **Supply APY**: Rate earned by lenders (lower than borrow APY)
+//! - **Borrow APY**: Rate paid by borrowers (higher than supply APY)
+//! - **Spread**: Difference goes to protocol fees and reserves
+//! - APY accounts for compound interest over a year
+
 use alloy::primitives::FixedBytes;
 use chrono::Utc;
 use clap::Parser;

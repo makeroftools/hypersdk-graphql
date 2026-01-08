@@ -17,10 +17,6 @@
 //!
 //! ## Quick Start
 //!
-//! ### HyperCore - Place an Order
-//!
-//! Create a mainnet client with `hypercore::mainnet()` to query markets and user balances.
-//!
 //! ### HyperCore - WebSocket Subscriptions
 //!
 //! ```no_run
@@ -46,14 +42,6 @@
 //! # }
 //! ```
 //!
-//! ### HyperEVM - Morpho Lending
-//!
-//! Create a Morpho client with `morpho::Client::mainnet().await?` to query APY rates.
-//!
-//! ### HyperEVM - Uniswap V3
-//!
-//! Create a Uniswap client with `uniswap::Client::mainnet(contracts).await?` to query pool prices.
-//!
 //! ## Modules
 //!
 //! - [`hypercore`]: HyperCore L1 chain interactions (trading, transfers, WebSocket)
@@ -69,4 +57,4 @@ pub use alloy::primitives::{Address, U160, U256, address};
 /// Re-exported decimal type from rust_decimal.
 ///
 /// Used for precise numerical operations, especially for prices and quantities.
-pub use rust_decimal::Decimal;
+pub use rust_decimal::{Decimal, dec};

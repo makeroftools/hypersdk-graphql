@@ -1,3 +1,47 @@
+//! Track PRJX token liquidity flows on Uniswap V3.
+//!
+//! This example monitors liquidity changes for a specific address's Uniswap V3 positions.
+//! It tracks IncreaseLiquidity and DecreaseLiquidity events to show how liquidity providers
+//! are adjusting their positions over time. Useful for analyzing LP behavior and tracking
+//! capital flows.
+//!
+//! # Usage
+//!
+//! ```bash
+//! # Track liquidity flows for a specific address
+//! cargo run --example prjx_flows -- \
+//!   --from 0x1234567890abcdef1234567890abcdef12345678 \
+//!   --rpc-url https://rpc.hyperliquid.xyz/evm
+//!
+//! # Custom position manager contract
+//! cargo run --example prjx_flows -- \
+//!   --contract-address 0x... \
+//!   --from 0x... \
+//!   --rpc-url https://rpc.hyperliquid.xyz/evm
+//! ```
+//!
+//! # What it does
+//!
+//! 1. Connects to HyperEVM via RPC
+//! 2. Fetches all Uniswap V3 positions for the target address
+//! 3. Resolves token symbols and decimals for all position pairs
+//! 4. Scans blockchain for liquidity increase/decrease events
+//! 5. Displays changes in liquidity amounts for each position
+//!
+//! # Output
+//!
+//! ```text
+//! Increased liquidity on 12345 USDC/WETH: 1000000 - 500000000000000000
+//! Decreased liquidity on 12345 USDC/WETH: 500000 - 250000000000000000
+//! ```
+//!
+//! # Use Cases
+//!
+//! - Monitor LP position management strategies
+//! - Track capital inflows/outflows for specific pools
+//! - Analyze liquidity provider behavior patterns
+//! - Build alerts for large liquidity changes
+
 use std::collections::HashMap;
 
 use alloy::{providers::Provider, rpc::types::Filter, sol_types::SolEvent};

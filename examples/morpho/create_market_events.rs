@@ -1,3 +1,55 @@
+//! List all Morpho markets with their current state.
+//!
+//! This example scans the entire blockchain for Morpho CreateMarket events and displays
+//! detailed information about each lending market including collateral, loan tokens,
+//! borrowed/supplied amounts, and risk parameters. Useful for market research and
+//! building lending protocol dashboards.
+//!
+//! # Usage
+//!
+//! ```bash
+//! # List all Morpho markets
+//! cargo run --example create_market_events -- \
+//!   --rpc-url https://rpc.hyperliquid.xyz/evm
+//!
+//! # Custom Morpho contract
+//! cargo run --example create_market_events -- \
+//!   --contract-address 0x... \
+//!   --rpc-url https://rpc.hyperliquid.xyz/evm
+//! ```
+//!
+//! # What it does
+//!
+//! 1. Connects to HyperEVM via RPC
+//! 2. Scans blockchain for all CreateMarket events (with progress bar)
+//! 3. Resolves token symbols for collateral and loan tokens
+//! 4. Fetches current market state (borrowed/supplied amounts)
+//! 5. Sorts markets by total borrowed amount
+//! 6. Displays comprehensive market details
+//!
+//! # Output
+//!
+//! ```text
+//! ------------
+//! market: 0xabcd...1234
+//! collateral: WETH
+//! loan token: USDC
+//! oracle: 0x5678...
+//! irm: 0x9abc...
+//! LLTV: 860000000000000000
+//! borrowed: 1000000000000
+//! supplied: 2000000000000
+//! ```
+//!
+//! # Market Parameters
+//!
+//! - **LLTV**: Liquidation Loan-to-Value ratio (e.g., 0.86 = 86%)
+//! - **IRM**: Interest Rate Model contract address
+//! - **Oracle**: Price oracle contract for collateral valuation
+//! - **Borrowed/Supplied**: Current market utilization
+//!
+//! The example uses concurrent fetching with dynamic rate limiting for optimal performance.
+
 use std::{sync::Arc, time::Duration};
 
 use alloy::{primitives::FixedBytes, providers::Provider, rpc::types::Filter, sol_types::SolEvent};

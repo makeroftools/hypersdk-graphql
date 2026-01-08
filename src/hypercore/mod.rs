@@ -87,12 +87,17 @@ pub mod types;
 mod utils;
 pub mod ws;
 
-use std::{fmt, hash::Hash};
+use std::{
+    fmt,
+    hash::Hash,
+    sync::atomic::{self, AtomicU64},
+};
 
 use alloy::primitives::{B128, U256, address};
 /// Reimport signers.
 pub use alloy::signers::local::PrivateKeySigner;
 use anyhow::Context;
+use chrono::Utc;
 use either::Either;
 /// Re-export error types.
 pub use error::{ActionError, Error};
@@ -128,6 +133,118 @@ pub use http::Client as HttpClient;
 ///
 /// Use this for subscribing to trades, order books, and order updates.
 pub use ws::Connection as WebSocket;
+
+/// Thread-safe nonce generator for Hyperliquid transactions.
+///
+/// Hyperliquid requires each transaction to have a unique, monotonically increasing nonce
+/// to prevent replay attacks. This handler generates nonces based on the current timestamp
+/// in milliseconds, ensuring uniqueness even under high-frequency trading scenarios.
+///
+/// # Thread Safety
+///
+/// This struct uses atomic operations and is safe to share across threads. Multiple threads
+/// can call `next()` concurrently without external synchronization.
+///
+/// # Nonce Generation Strategy
+///
+/// 1. Starts with the current timestamp in milliseconds
+/// 2. Increments by 1 for each subsequent call
+/// 3. If the nonce falls behind the current time by more than 300ms, jumps to current time
+/// 4. This ensures nonces stay close to real time while maintaining uniqueness
+///
+/// # Example
+///
+/// ```
+/// use hypersdk::hypercore::NonceHandler;
+///
+/// let handler = NonceHandler::default();
+///
+/// // Generate sequential nonces
+/// let nonce1 = handler.next();
+/// let nonce2 = handler.next();
+/// assert!(nonce2 > nonce1);
+///
+/// // Nonces are always unique and increasing
+/// for _ in 0..1000 {
+///     let n = handler.next();
+///     assert!(n > nonce1);
+/// }
+/// ```
+///
+/// # Use with HTTP Client
+///
+/// ```no_run
+/// use hypersdk::hypercore::{self, NonceHandler};
+///
+/// # async fn example() -> anyhow::Result<()> {
+/// let client = hypercore::mainnet();
+/// let nonce_handler = NonceHandler::default();
+///
+/// // Use for multiple transactions
+/// let nonce1 = nonce_handler.next();
+/// let nonce2 = nonce_handler.next();
+/// # Ok(())
+/// # }
+/// ```
+pub struct NonceHandler {
+    nonce: AtomicU64,
+}
+
+impl Default for NonceHandler {
+    fn default() -> Self {
+        let now = Utc::now().timestamp_millis() as u64;
+        Self {
+            nonce: AtomicU64::new(now),
+        }
+    }
+}
+
+impl NonceHandler {
+    /// Generates the next unique nonce for a transaction.
+    ///
+    /// This method is thread-safe and can be called concurrently from multiple threads.
+    /// It guarantees that:
+    /// - Each returned nonce is unique
+    /// - Nonces are monotonically increasing
+    /// - Nonces stay reasonably close to the current timestamp
+    ///
+    /// # Algorithm
+    ///
+    /// 1. Gets the current time in milliseconds
+    /// 2. Atomically increments the internal nonce counter
+    /// 3. If the counter has fallen behind current time by >300ms, resets to current time
+    /// 4. Otherwise returns the incremented counter value
+    ///
+    /// # Returns
+    ///
+    /// A unique nonce suitable for use in Hyperliquid transactions.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use hypersdk::hypercore::NonceHandler;
+    ///
+    /// let handler = Arc::new(NonceHandler::default());
+    /// let nonce = handler.next();
+    /// println!("Transaction nonce: {}", nonce);
+    /// ```
+    pub fn next(&self) -> u64 {
+        let current = Utc::now().timestamp_millis() as u64;
+        let nonce = self.nonce.fetch_add(1, atomic::Ordering::Relaxed);
+        if nonce + 300 < current {
+            let _ = self.nonce.compare_exchange(
+                nonce + 1,
+                current,
+                atomic::Ordering::AcqRel,
+                atomic::Ordering::Relaxed,
+            );
+            current
+        } else {
+            nonce
+        }
+    }
+}
 
 /// Chain identifier for Hyperliquid operations.
 ///

@@ -1,3 +1,59 @@
+//! Track MetaMorpho vault performance for a specific user.
+//!
+//! This example analyzes a user's deposit and withdrawal history in a MetaMorpho vault,
+//! calculating their profit/loss and performance over time. It's useful for portfolio
+//! tracking, performance analytics, and building vault monitoring dashboards.
+//!
+//! # Usage
+//!
+//! ```bash
+//! # Track vault performance for a user
+//! cargo run --example vault_performance -- \
+//!   --user 0x1234567890abcdef1234567890abcdef12345678 \
+//!   --rpc-url https://rpc.hyperliquid.xyz/evm
+//!
+//! # Custom vault address
+//! cargo run --example vault_performance -- \
+//!   --contract-address 0x... \
+//!   --user 0x... \
+//!   --rpc-url https://rpc.hyperliquid.xyz/evm
+//! ```
+//!
+//! # What it does
+//!
+//! 1. Connects to HyperEVM via RPC
+//! 2. Scans blockchain for user's deposit/withdraw events in the vault
+//! 3. Tracks share balances and asset values over time
+//! 4. Calculates unrealized PnL at regular intervals
+//! 5. Shows realized PnL on withdrawals
+//!
+//! # Output
+//!
+//! ```text
+//! 5000000: 12.5
+//! << Deposit (Block 5100000):
+//!   Owner:  0x1234...
+//!   Sender: 0x1234...
+//!   Shares: 1000000000000000000
+//!   Assets: 1000000000
+//! 5200000: 15.3
+//! >> Withdraw (Block 5300000), total pnl: 18.7:
+//!   Owner:  0x1234...
+//!   Sender: 0x1234...
+//!   Shares: 500000000000000000
+//!   Assets: 518700000
+//! ```
+//!
+//! # Understanding Performance Tracking
+//!
+//! - **Block numbers**: Show when events occurred
+//! - **PnL values**: Profit/loss in underlying asset (e.g., USDC)
+//! - **Shares**: ERC-4626 vault share tokens
+//! - **Assets**: Underlying asset amount (increases as vault earns yield)
+//!
+//! The example uses concurrent fetching with rate limiting to efficiently
+//! scan the entire blockchain history.
+
 use std::sync::Arc;
 
 use alloy::{primitives::utils, rpc::types::Filter, sol_types::SolEvent};

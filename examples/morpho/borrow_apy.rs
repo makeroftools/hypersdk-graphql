@@ -1,3 +1,47 @@
+//! Query borrow APY for a specific Morpho market.
+//!
+//! This example fetches the current borrow APY (Annual Percentage Yield) for a specific
+//! Morpho lending market. It's useful for borrowers looking to compare rates or build
+//! lending rate comparison tools.
+//!
+//! # Usage
+//!
+//! ```bash
+//! # Query borrow APY for a specific market
+//! cargo run --example borrow_apy -- \
+//!   --market-id 0xabcd...1234 \
+//!   --rpc-url https://rpc.hyperliquid.xyz/evm
+//!
+//! # Custom Morpho contract address
+//! cargo run --example borrow_apy -- \
+//!   --contract-address 0x... \
+//!   --market-id 0x... \
+//!   --rpc-url https://rpc.hyperliquid.xyz/evm
+//! ```
+//!
+//! # What it does
+//!
+//! 1. Connects to HyperEVM via RPC
+//! 2. Fetches market parameters and state from Morpho contract
+//! 3. Calculates current borrow APY based on utilization and IRM
+//! 4. Resolves collateral and loan token symbols
+//! 5. Displays borrow rate and last update timestamp
+//!
+//! # Output
+//!
+//! ```text
+//! Connecting to RPC endpoint: https://rpc.hyperliquid.xyz/evm
+//! market params last updated at 2024-01-08 12:34:56 UTC
+//! borrow APY for USDC / WETH is 5.23
+//! ```
+//!
+//! # Finding Market IDs
+//!
+//! Market IDs can be found by:
+//! - Using the `create_market_events` example to list all markets
+//! - Querying Morpho subgraphs or indexers
+//! - Checking Morpho documentation for specific market IDs
+
 use alloy::{primitives::FixedBytes, providers::Provider};
 use chrono::Utc;
 use clap::Parser;

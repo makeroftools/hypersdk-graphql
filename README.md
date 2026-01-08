@@ -25,6 +25,16 @@ This SDK provides:
 - **HIP-3 support**: Query perpetual markets from multiple DEXes
 - **CLI tool** (`hypecli`): Command-line interface for Hyperliquid (will be extended in the future)
 
+## Design choices
+
+- [alloy](https://alloy.rs/) is the preferred crate for interacting with EVM and Hyperliquid L1 signatures.
+- [rust_decimal](https://docs.rs/rust_decimal) is the go-to for high-precision decimals. For certain EVM types
+  rust_decimal might not be enough. This crate is used to convert from String representation in the WebSocket
+  paylaods to a high-precision decimal number that can be easily treated and converted to other types of fixed-point
+  numbers.
+- [yawc](https://docs.rs/yawc) for the WebSocket implementation given that it is a zero-copy implementation of the WebSocket
+  protocol supporting per-message deflate.
+
 ## Installation
 
 Add to your `Cargo.toml`:
@@ -62,15 +72,28 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
+Run it with:
+
+```bash
+cargo new --bin my_hl_project
+cd my_hl_project
+cargo add hypersdk
+cargo add anyhow
+cargo add tokio --features full
+cargo run
+```
+
 ### HyperCore - Place an Order
 
 ```rust
 use hypersdk::hypercore::{self, types::*, PrivateKeySigner};
-use rust_decimal_macros::dec;
+use rust_decimal::{dec, Decimal};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let client = hypercore::mainnet();
+    // You can also use existing Foundry keystores!!
+    // let signer = LocalSigner::decrypt_keystore("/home/user/.foundry/keystores/my_user", "123")?;
     let signer: PrivateKeySigner = "your_private_key".parse()?;
 
     let order = BatchOrder {
