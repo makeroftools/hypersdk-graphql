@@ -1784,19 +1784,6 @@ impl std::str::FromStr for Signature {
     /// The input can be:
     /// - With or without "0x" prefix
     /// - 130 hex characters (65 bytes: r=32, s=32, v=1)
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use hypersdk::hypercore::types::Signature;
-    ///
-    /// // With 0x prefix
-    /// let sig: Signature = "0xaabbcc...".parse()?;
-    ///
-    /// // Without 0x prefix
-    /// let sig: Signature = "aabbcc...".parse()?;
-    /// # Ok::<(), anyhow::Error>(())
-    /// ```
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         // Remove 0x prefix if present
         let hex_str = s.strip_prefix("0x").unwrap_or(s);
