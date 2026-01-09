@@ -11,7 +11,7 @@ use alloy::{
     primitives::{Address, B256, U256, keccak256},
     sol_types::SolStruct,
 };
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::{Cloid, types::ARBITRUM_MAINNET_EIP712_DOMAIN};
 
@@ -25,6 +25,15 @@ where
     serializer.serialize_str(&format!("{:#x}", value))
 }
 
+/// Deserializes a cloid (B128) from a hex string.
+pub(super) fn deserialize_cloid_from_hex<'de, D>(deserializer: D) -> Result<Cloid, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    s.parse::<Cloid>().map_err(serde::de::Error::custom)
+}
+
 /// Serializes an address as a hex string.
 pub(super) fn serialize_address_as_hex<S>(value: &Address, serializer: S) -> Result<S::Ok, S::Error>
 where
@@ -33,12 +42,31 @@ where
     serializer.serialize_str(&format!("{:#x}", value))
 }
 
+/// Deserializes an address from a hex string.
+pub(super) fn deserialize_address_from_hex<'de, D>(deserializer: D) -> Result<Address, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    s.parse::<Address>().map_err(serde::de::Error::custom)
+}
+
 /// Serializes a U256 value as a hex string.
 pub(super) fn serialize_as_hex<S>(value: &U256, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
     serializer.serialize_str(&format!("{:#x}", value))
+}
+
+/// Deserializes a U256 value from a hex string.
+pub(super) fn deserialize_from_hex<'de, D>(deserializer: D) -> Result<U256, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    let s = s.strip_prefix("0x").unwrap_or(&s);
+    U256::from_str_radix(s, 16).map_err(serde::de::Error::custom)
 }
 
 /// Computes the RMP (MessagePack) hash of a value for signing.

@@ -14,10 +14,13 @@ use serde::Serialize;
 
 use crate::hypercore::{
     ARBITRUM_TESTNET_CHAIN_ID, Chain,
+    raw::{
+        Action, ActionRequest, MultiSigAction, MultiSigPayload, SendAssetAction, SpotSendAction,
+        UsdSendAction,
+    },
     types::{
-        Action, ActionRequest, BatchCancel, BatchCancelCloid, BatchModify, BatchOrder,
-        CORE_MAINNET_EIP712_DOMAIN, MultiSigAction, MultiSigPayload, ScheduleCancel,
-        SendAssetAction, Signature, SpotSendAction, UsdSendAction, solidity,
+        BatchCancel, BatchCancelCloid, BatchModify, BatchOrder, CORE_MAINNET_EIP712_DOMAIN,
+        ScheduleCancel, Signature, solidity,
     },
     utils::{get_typed_data, rmp_hash},
 };
@@ -90,8 +93,8 @@ use crate::hypercore::{
 /// # Required Traits
 ///
 /// - `Serialize`: Actions must be serializable (for RMP hashing or typed data creation)
-pub(super) trait Signable: Serialize {
-    /// Sign this action and create a signed action request.
+pub(super) trait Signable: Serialize + Clone {
+    /// Sign this action synchronously and create a signed action request.
     ///
     /// This method consumes the action, signs it using the appropriate method (RMP or EIP-712),
     /// and returns a complete `ActionRequest` that can be submitted to the exchange.
@@ -99,7 +102,7 @@ pub(super) trait Signable: Serialize {
     /// # Parameters
     ///
     /// - `self`: The action to sign (consumed to avoid cloning)
-    /// - `signer`: The signer that will sign the action
+    /// - `signer`: The signer that will sign the action synchronously
     /// - `nonce`: Unique transaction nonce (typically millisecond timestamp)
     /// - `maybe_vault_address`: Optional vault address if trading on behalf of a vault
     /// - `maybe_expires_after`: Optional expiration time for the request
@@ -132,8 +135,8 @@ pub(super) trait Signable: Serialize {
     /// let order = BatchOrder { /* ... */ };
     /// let nonce = chrono::Utc::now().timestamp_millis() as u64;
     ///
-    /// // Sign the order
-    /// let action_request = order.sign(
+    /// // Sign the order synchronously
+    /// let action_request = order.sign_sync(
     ///     &signer,
     ///     nonce,
     ///     None,  // No vault
@@ -150,7 +153,75 @@ pub(super) trait Signable: Serialize {
     /// - Vault address is only needed when trading on behalf of a vault
     /// - Expiration is optional but recommended for time-sensitive operations
     /// - The action is consumed (moved) to avoid unnecessary cloning
-    fn sign<S: SignerSync>(
+    fn sign_sync<S: SignerSync>(
+        self,
+        signer: &S,
+        nonce: u64,
+        maybe_vault_address: Option<Address>,
+        maybe_expires_after: Option<DateTime<Utc>>,
+        chain: Chain,
+    ) -> anyhow::Result<ActionRequest>;
+
+    /// Sign this action asynchronously and create a signed action request.
+    ///
+    /// This method consumes the action, signs it using the appropriate method (RMP or EIP-712),
+    /// and returns a complete `ActionRequest` that can be submitted to the exchange.
+    ///
+    /// # Parameters
+    ///
+    /// - `self`: The action to sign (consumed to avoid cloning)
+    /// - `signer`: The async signer that will sign the action
+    /// - `nonce`: Unique transaction nonce (typically millisecond timestamp)
+    /// - `maybe_vault_address`: Optional vault address if trading on behalf of a vault
+    /// - `maybe_expires_after`: Optional expiration time for the request
+    /// - `chain`: The chain (mainnet or testnet)
+    ///
+    /// # Returns
+    ///
+    /// Returns an `ActionRequest` containing:
+    /// - The signed action
+    /// - The signature (r, s, v)
+    /// - The nonce
+    /// - Optional vault address
+    /// - Optional expiration timestamp
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Serialization fails (for RMP-based actions)
+    /// - Signing fails (invalid signer or signature generation error)
+    /// - Typed data creation fails (for EIP-712 actions)
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use hypersdk::hypercore::types::BatchOrder;
+    /// use hypersdk::hypercore::signing::Signable;
+    /// use alloy::signers::local::PrivateKeySigner;
+    ///
+    /// let signer: PrivateKeySigner = "0x...".parse()?;
+    /// let order = BatchOrder { /* ... */ };
+    /// let nonce = chrono::Utc::now().timestamp_millis() as u64;
+    ///
+    /// // Sign the order asynchronously
+    /// let action_request = order.sign(
+    ///     &signer,
+    ///     nonce,
+    ///     None,  // No vault
+    ///     None,  // No expiry
+    ///     Chain::Mainnet,
+    /// ).await?;
+    ///
+    /// // action_request can now be submitted to the exchange
+    /// ```
+    ///
+    /// # Notes
+    ///
+    /// - Nonce must be unique for each transaction (typically use current timestamp in ms)
+    /// - Vault address is only needed when trading on behalf of a vault
+    /// - Expiration is optional but recommended for time-sensitive operations
+    /// - The action is consumed (moved) to avoid unnecessary cloning
+    async fn sign<S: Signer + Send + Sync>(
         self,
         signer: &S,
         nonce: u64,
@@ -163,7 +234,25 @@ pub(super) trait Signable: Serialize {
 // RMP-based actions (orders, cancels, modifications)
 // These use MessagePack serialization + keccak256 hash + EIP-712 Agent wrapper
 impl Signable for BatchOrder {
-    fn sign<S: SignerSync>(
+    fn sign_sync<S: SignerSync>(
+        self,
+        signer: &S,
+        nonce: u64,
+        maybe_vault_address: Option<Address>,
+        maybe_expires_after: Option<DateTime<Utc>>,
+        chain: Chain,
+    ) -> Result<ActionRequest> {
+        sign_rmp_sync(
+            signer,
+            Action::Order(self),
+            nonce,
+            maybe_vault_address,
+            maybe_expires_after,
+            chain,
+        )
+    }
+
+    async fn sign<S: Signer + Send + Sync>(
         self,
         signer: &S,
         nonce: u64,
@@ -179,11 +268,30 @@ impl Signable for BatchOrder {
             maybe_expires_after,
             chain,
         )
+        .await
     }
 }
 
 impl Signable for BatchModify {
-    fn sign<S: SignerSync>(
+    fn sign_sync<S: SignerSync>(
+        self,
+        signer: &S,
+        nonce: u64,
+        maybe_vault_address: Option<Address>,
+        maybe_expires_after: Option<DateTime<Utc>>,
+        chain: Chain,
+    ) -> Result<ActionRequest> {
+        sign_rmp_sync(
+            signer,
+            Action::BatchModify(self),
+            nonce,
+            maybe_vault_address,
+            maybe_expires_after,
+            chain,
+        )
+    }
+
+    async fn sign<S: Signer + Send + Sync>(
         self,
         signer: &S,
         nonce: u64,
@@ -199,11 +307,30 @@ impl Signable for BatchModify {
             maybe_expires_after,
             chain,
         )
+        .await
     }
 }
 
 impl Signable for BatchCancel {
-    fn sign<S: SignerSync>(
+    fn sign_sync<S: SignerSync>(
+        self,
+        signer: &S,
+        nonce: u64,
+        maybe_vault_address: Option<Address>,
+        maybe_expires_after: Option<DateTime<Utc>>,
+        chain: Chain,
+    ) -> Result<ActionRequest> {
+        sign_rmp_sync(
+            signer,
+            Action::Cancel(self),
+            nonce,
+            maybe_vault_address,
+            maybe_expires_after,
+            chain,
+        )
+    }
+
+    async fn sign<S: Signer + Send + Sync>(
         self,
         signer: &S,
         nonce: u64,
@@ -219,11 +346,30 @@ impl Signable for BatchCancel {
             maybe_expires_after,
             chain,
         )
+        .await
     }
 }
 
 impl Signable for BatchCancelCloid {
-    fn sign<S: SignerSync>(
+    fn sign_sync<S: SignerSync>(
+        self,
+        signer: &S,
+        nonce: u64,
+        maybe_vault_address: Option<Address>,
+        maybe_expires_after: Option<DateTime<Utc>>,
+        chain: Chain,
+    ) -> Result<ActionRequest> {
+        sign_rmp_sync(
+            signer,
+            Action::CancelByCloid(self),
+            nonce,
+            maybe_vault_address,
+            maybe_expires_after,
+            chain,
+        )
+    }
+
+    async fn sign<S: Signer + Send + Sync>(
         self,
         signer: &S,
         nonce: u64,
@@ -239,11 +385,30 @@ impl Signable for BatchCancelCloid {
             maybe_expires_after,
             chain,
         )
+        .await
     }
 }
 
 impl Signable for ScheduleCancel {
-    fn sign<S: SignerSync>(
+    fn sign_sync<S: SignerSync>(
+        self,
+        signer: &S,
+        nonce: u64,
+        maybe_vault_address: Option<Address>,
+        maybe_expires_after: Option<DateTime<Utc>>,
+        chain: Chain,
+    ) -> Result<ActionRequest> {
+        sign_rmp_sync(
+            signer,
+            Action::ScheduleCancel(self),
+            nonce,
+            maybe_vault_address,
+            maybe_expires_after,
+            chain,
+        )
+    }
+
+    async fn sign<S: Signer + Send + Sync>(
         self,
         signer: &S,
         nonce: u64,
@@ -259,13 +424,14 @@ impl Signable for ScheduleCancel {
             maybe_expires_after,
             chain,
         )
+        .await
     }
 }
 
 // EIP-712 typed data actions (transfers and asset movements)
 // These use direct EIP-712 typed data signing for better wallet UX
 impl Signable for UsdSendAction {
-    fn sign<S: SignerSync>(
+    fn sign_sync<S: SignerSync>(
         self,
         signer: &S,
         nonce: u64,
@@ -274,12 +440,24 @@ impl Signable for UsdSendAction {
         _chain: Chain,
     ) -> Result<ActionRequest> {
         let typed_data = get_typed_data::<solidity::UsdSend>(&self, None);
-        sign_eip712(signer, Action::UsdSend(self), typed_data, nonce)
+        sign_eip712_sync(signer, Action::UsdSend(self), typed_data, nonce)
+    }
+
+    async fn sign<S: Signer + Send + Sync>(
+        self,
+        signer: &S,
+        nonce: u64,
+        _maybe_vault_address: Option<Address>,
+        _maybe_expires_after: Option<DateTime<Utc>>,
+        _chain: Chain,
+    ) -> Result<ActionRequest> {
+        let typed_data = get_typed_data::<solidity::UsdSend>(&self, None);
+        sign_eip712(signer, Action::UsdSend(self), typed_data, nonce).await
     }
 }
 
 impl Signable for SendAssetAction {
-    fn sign<S: SignerSync>(
+    fn sign_sync<S: SignerSync>(
         self,
         signer: &S,
         nonce: u64,
@@ -288,12 +466,24 @@ impl Signable for SendAssetAction {
         _chain: Chain,
     ) -> Result<ActionRequest> {
         let typed_data = get_typed_data::<solidity::SendAsset>(&self, None);
-        sign_eip712(signer, Action::SendAsset(self), typed_data, nonce)
+        sign_eip712_sync(signer, Action::SendAsset(self), typed_data, nonce)
+    }
+
+    async fn sign<S: Signer + Send + Sync>(
+        self,
+        signer: &S,
+        nonce: u64,
+        _maybe_vault_address: Option<Address>,
+        _maybe_expires_after: Option<DateTime<Utc>>,
+        _chain: Chain,
+    ) -> Result<ActionRequest> {
+        let typed_data = get_typed_data::<solidity::SendAsset>(&self, None);
+        sign_eip712(signer, Action::SendAsset(self), typed_data, nonce).await
     }
 }
 
 impl Signable for SpotSendAction {
-    fn sign<S: SignerSync>(
+    fn sign_sync<S: SignerSync>(
         self,
         signer: &S,
         nonce: u64,
@@ -302,12 +492,42 @@ impl Signable for SpotSendAction {
         _chain: Chain,
     ) -> Result<ActionRequest> {
         let typed_data = get_typed_data::<solidity::SpotSend>(&self, None);
-        sign_eip712(signer, Action::SpotSend(self), typed_data, nonce)
+        sign_eip712_sync(signer, Action::SpotSend(self), typed_data, nonce)
+    }
+
+    async fn sign<S: Signer + Send + Sync>(
+        self,
+        signer: &S,
+        nonce: u64,
+        _maybe_vault_address: Option<Address>,
+        _maybe_expires_after: Option<DateTime<Utc>>,
+        _chain: Chain,
+    ) -> Result<ActionRequest> {
+        let typed_data = get_typed_data::<solidity::SpotSend>(&self, None);
+        sign_eip712(signer, Action::SpotSend(self), typed_data, nonce).await
     }
 }
 
 impl Signable for MultiSigAction {
-    fn sign<S: SignerSync>(
+    fn sign_sync<S: SignerSync>(
+        self,
+        signer: &S,
+        nonce: u64,
+        maybe_vault_address: Option<Address>,
+        maybe_expires_after: Option<DateTime<Utc>>,
+        chain: Chain,
+    ) -> Result<ActionRequest> {
+        multisig_lead_msg_sync(
+            signer,
+            self,
+            nonce,
+            maybe_vault_address,
+            maybe_expires_after,
+            chain,
+        )
+    }
+
+    async fn sign<S: Signer + Send + Sync>(
         self,
         signer: &S,
         nonce: u64,
@@ -323,11 +543,12 @@ impl Signable for MultiSigAction {
             maybe_expires_after,
             chain,
         )
+        .await
     }
 }
 
-/// Send a signed action hashing with typed data.
-pub(super) fn sign_eip712<S: SignerSync>(
+/// Send a signed action hashing with typed data (synchronous).
+pub(super) fn sign_eip712_sync<S: SignerSync>(
     signer: &S,
     action: Action,
     typed_data: TypedData,
@@ -345,8 +566,27 @@ pub(super) fn sign_eip712<S: SignerSync>(
     })
 }
 
-/// Signs an action using RMP (messagepack) hashing.
-pub(super) fn sign_rmp<S: SignerSync>(
+/// Send a signed action hashing with typed data (asynchronous).
+pub(super) async fn sign_eip712<S: Signer + Send + Sync>(
+    signer: &S,
+    action: Action,
+    typed_data: TypedData,
+    nonce: u64,
+) -> Result<ActionRequest> {
+    let signature = signer.sign_dynamic_typed_data(&typed_data).await?;
+    let sig: Signature = signature.into();
+
+    Ok(ActionRequest {
+        signature: sig,
+        action,
+        nonce,
+        vault_address: None,
+        expires_after: None,
+    })
+}
+
+/// Signs an action using RMP (messagepack) hashing (synchronous).
+pub(super) fn sign_rmp_sync<S: SignerSync>(
     signer: &S,
     action: Action,
     nonce: u64,
@@ -357,7 +597,30 @@ pub(super) fn sign_rmp<S: SignerSync>(
     let expires_after = maybe_expires_after.map(|after| after.timestamp_millis() as u64);
     let connection_id = action.hash(nonce, maybe_vault_address, expires_after)?;
 
-    let signature = sign_l1_action(signer, chain, connection_id)?;
+    let signature = sign_l1_action_sync(signer, chain, connection_id)?;
+
+    Ok(ActionRequest {
+        signature,
+        action,
+        nonce,
+        vault_address: maybe_vault_address,
+        expires_after,
+    })
+}
+
+/// Signs an action using RMP (messagepack) hashing (asynchronous).
+pub(super) async fn sign_rmp<S: Signer + Send + Sync>(
+    signer: &S,
+    action: Action,
+    nonce: u64,
+    maybe_vault_address: Option<Address>,
+    maybe_expires_after: Option<DateTime<Utc>>,
+    chain: Chain,
+) -> Result<ActionRequest> {
+    let expires_after = maybe_expires_after.map(|after| after.timestamp_millis() as u64);
+    let connection_id = action.hash(nonce, maybe_vault_address, expires_after)?;
+
+    let signature = sign_l1_action(signer, chain, connection_id).await?;
 
     Ok(ActionRequest {
         signature,
@@ -370,7 +633,7 @@ pub(super) fn sign_rmp<S: SignerSync>(
 
 /// Signs an L1 action with EIP-712.
 #[inline(always)]
-pub(super) fn sign_l1_action<S: SignerSync>(
+pub(super) fn sign_l1_action_sync<S: SignerSync>(
     signer: &S,
     chain: Chain,
     connection_id: B256,
@@ -385,7 +648,26 @@ pub(super) fn sign_l1_action<S: SignerSync>(
     Ok(sig.into())
 }
 
-/// Signs a multisig action for submission to the exchange.
+/// Signs an L1 action with EIP-712.
+#[inline(always)]
+pub async fn sign_l1_action<S: Signer + Send + Sync>(
+    signer: &S,
+    chain: Chain,
+    connection_id: B256,
+) -> anyhow::Result<Signature> {
+    let sig = signer
+        .sign_typed_data(
+            &solidity::Agent {
+                source: if chain.is_mainnet() { "a" } else { "b" }.to_string(),
+                connectionId: connection_id,
+            },
+            &CORE_MAINNET_EIP712_DOMAIN,
+        )
+        .await?;
+    Ok(sig.into())
+}
+
+/// Signs a multisig action for submission to the exchange (synchronous).
 ///
 /// This function creates the final signature that wraps all the collected multisig signatures.
 /// The lead signer signs an envelope containing:
@@ -406,7 +688,7 @@ pub(super) fn sign_l1_action<S: SignerSync>(
 /// - `nonce`: Unique transaction nonce
 /// - `maybe_vault_address`: Optional vault address if trading on behalf of a vault
 /// - `maybe_expires_after`: Optional expiration time for the request
-pub(super) fn multisig_lead_msg<S: SignerSync>(
+pub fn multisig_lead_msg_sync<S: SignerSync>(
     signer: &S,
     action: MultiSigAction,
     nonce: u64,
@@ -416,7 +698,6 @@ pub(super) fn multisig_lead_msg<S: SignerSync>(
 ) -> Result<ActionRequest> {
     let expires_after = maybe_expires_after.map(|after| after.timestamp_millis() as u64);
     let multsig_hash = rmp_hash(&action, nonce, maybe_vault_address, expires_after)?;
-    // println!("multi {}", multsig_hash);
 
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
@@ -436,7 +717,66 @@ pub(super) fn multisig_lead_msg<S: SignerSync>(
     typed_data.domain = super::types::MULTISIG_MAINNET_EIP712_DOMAIN;
 
     let sig = signer.sign_dynamic_typed_data_sync(&typed_data)?.into();
-    // println!("lead: {sig:?}");
+
+    Ok(ActionRequest {
+        signature: sig,
+        action: Action::MultiSig(action),
+        nonce,
+        vault_address: maybe_vault_address,
+        expires_after,
+    })
+}
+
+/// Signs a multisig action for submission to the exchange (asynchronous).
+///
+/// This function creates the final signature that wraps all the collected multisig signatures.
+/// The lead signer signs an envelope containing:
+/// - The chain identifier (mainnet/testnet)
+/// - The hash of the entire multisig action (including all signer signatures)
+/// - The nonce
+///
+/// # EIP-712 Domain
+///
+/// Always uses the mainnet multisig domain (chainId 0x66eee) for both mainnet and testnet.
+/// The `hyperliquidChain` field in the message distinguishes between mainnet and testnet.
+///
+/// # Parameters
+///
+/// - `signer`: The lead signer who submits the transaction
+/// - `chain`: The chain (mainnet/testnet) - determines the hyperliquidChain field
+/// - `action`: The complete multisig action with all collected signatures
+/// - `nonce`: Unique transaction nonce
+/// - `maybe_vault_address`: Optional vault address if trading on behalf of a vault
+/// - `maybe_expires_after`: Optional expiration time for the request
+pub async fn multisig_lead_msg<S: Signer + Send + Sync>(
+    signer: &S,
+    action: MultiSigAction,
+    nonce: u64,
+    maybe_vault_address: Option<Address>,
+    maybe_expires_after: Option<DateTime<Utc>>,
+    chain: Chain,
+) -> Result<ActionRequest> {
+    let expires_after = maybe_expires_after.map(|after| after.timestamp_millis() as u64);
+    let multsig_hash = rmp_hash(&action, nonce, maybe_vault_address, expires_after)?;
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Envelope {
+        hyperliquid_chain: String,
+        multi_sig_action_hash: String,
+        nonce: u64,
+    }
+
+    let envelope = Envelope {
+        hyperliquid_chain: chain.to_string(),
+        multi_sig_action_hash: multsig_hash.to_string(),
+        nonce,
+    };
+
+    let mut typed_data = get_typed_data::<solidity::SendMultiSig>(&envelope, None);
+    typed_data.domain = super::types::MULTISIG_MAINNET_EIP712_DOMAIN;
+
+    let sig = signer.sign_dynamic_typed_data(&typed_data).await?.into();
 
     Ok(ActionRequest {
         signature: sig,
@@ -510,7 +850,7 @@ pub(super) fn multisig_lead_msg<S: SignerSync>(
 /// # Reference
 ///
 /// Based on: https://github.com/hyperliquid-dex/hyperliquid-python-sdk/blob/be7523d58297a93d0e938063460c14ae45e9034f/hyperliquid/utils/signing.py#L293
-pub(super) fn multisig_collect_signatures<'a, S: SignerSync + Signer + 'a>(
+pub(super) async fn multisig_collect_signatures<'a, S: Signer + Send + Sync + 'a>(
     lead: Address,
     multi_sig_user: Address,
     signers: impl Iterator<Item = &'a S>,
@@ -527,7 +867,7 @@ pub(super) fn multisig_collect_signatures<'a, S: SignerSync + Signer + 'a>(
     let mut signatures =
         if let Some(typed_data) = inner_action.typed_data_multisig(multi_sig_user, lead) {
             // EIP-712 typed data actions (UsdSend, SpotSend, SendAsset)
-            multisig_collect_eip712_signatures(signers, typed_data)?
+            multisig_collect_eip712_signatures(signers, typed_data).await?
         } else {
             // RMP-based actions (orders, cancels, modifications)
             multisig_collect_rmp_signatures(
@@ -537,12 +877,13 @@ pub(super) fn multisig_collect_signatures<'a, S: SignerSync + Signer + 'a>(
                 &inner_action,
                 nonce,
                 chain,
-            )?
+            )
+            .await?
         };
     signatures.extend(signed);
 
     Ok(MultiSigAction {
-        signature_chain_id: ARBITRUM_TESTNET_CHAIN_ID,
+        signature_chain_id: ARBITRUM_TESTNET_CHAIN_ID.to_owned(),
         signatures,
         payload: MultiSigPayload {
             multi_sig_user: multi_sig_user_str,
@@ -562,7 +903,7 @@ pub(super) fn multisig_collect_signatures<'a, S: SignerSync + Signer + 'a>(
 /// 1. Set the multisig EIP-712 domain on the typed data
 /// 2. Each signer signs the same typed data
 /// 3. Return all signatures
-fn multisig_collect_eip712_signatures<'a, S: SignerSync + Signer + 'a>(
+async fn multisig_collect_eip712_signatures<'a, S: Signer + Send + Sync + 'a>(
     signers: impl Iterator<Item = &'a S>,
     typed_data: TypedData,
 ) -> Result<Vec<Signature>> {
@@ -570,13 +911,13 @@ fn multisig_collect_eip712_signatures<'a, S: SignerSync + Signer + 'a>(
     let mut typed_data = typed_data;
     typed_data.domain = super::types::MULTISIG_MAINNET_EIP712_DOMAIN;
 
-    // Each signer signs the same typed data
-    signers
-        .map(|signer| {
-            let signature = signer.sign_dynamic_typed_data_sync(&typed_data)?;
-            Ok(signature.into())
-        })
-        .collect()
+    let mut signatures = vec![];
+    for signer in signers {
+        let signature = signer.sign_dynamic_typed_data(&typed_data).await?;
+        signatures.push(signature.into());
+    }
+
+    Ok(signatures)
 }
 
 /// Collects signatures for RMP-based actions (orders, cancels, modifications).
@@ -589,7 +930,7 @@ fn multisig_collect_eip712_signatures<'a, S: SignerSync + Signer + 'a>(
 /// 1. Create RMP hash from (multisig_user, lead, action, nonce)
 /// 2. Each signer signs the hash using EIP-712 Agent wrapper
 /// 3. Return all signatures
-fn multisig_collect_rmp_signatures<'a, S: SignerSync + Signer + 'a>(
+async fn multisig_collect_rmp_signatures<'a, S: Signer + Send + Sync + 'a>(
     signers: impl Iterator<Item = &'a S>,
     multi_sig_user: &str,
     lead: &str,
@@ -600,10 +941,13 @@ fn multisig_collect_rmp_signatures<'a, S: SignerSync + Signer + 'a>(
     // Create the RMP hash once
     let connection_id = rmp_hash(&(multi_sig_user, lead, action), nonce, None, None)?;
 
-    // Each signer signs the same hash
-    signers
-        .map(|signer| sign_l1_action(signer, chain, connection_id))
-        .collect()
+    let mut signatures = vec![];
+    for signer in signers {
+        let signature = sign_l1_action(signer, chain, connection_id).await?;
+        signatures.push(signature);
+    }
+
+    Ok(signatures)
 }
 
 #[cfg(test)]
@@ -626,8 +970,8 @@ mod tests {
     fn test_sign_usd_transfer_action() {
         let signer = get_signer();
 
-        let usd_send = types::UsdSendAction {
-            signature_chain_id: ARBITRUM_MAINNET_CHAIN_ID,
+        let usd_send = types::raw::UsdSendAction {
+            signature_chain_id: ARBITRUM_MAINNET_CHAIN_ID.to_owned(),
             hyperliquid_chain: Chain::Mainnet,
             destination: "0x0D1d9635D0640821d15e323ac8AdADfA9c111414"
                 .parse()

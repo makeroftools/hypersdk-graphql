@@ -56,12 +56,14 @@ use url::Url;
 
 use super::signing::*;
 use crate::hypercore::{
-    ActionError, CandleInterval, Chain, Cloid, Dex, OidOrCloid, PerpMarket, Signature, SpotMarket,
-    SpotToken, mainnet_url, testnet_url,
+    ActionError, CandleInterval, Chain, Cloid, Dex, MultiSigConfig, OidOrCloid, PerpMarket,
+    Signature, SpotMarket, SpotToken, mainnet_url,
+    raw::{Action, ActionRequest, ApiResponse, OkResponse},
+    testnet_url,
     types::{
-        Action, ApiResponse, BasicOrder, BatchCancel, BatchCancelCloid, BatchModify, BatchOrder,
-        Fill, InfoRequest, OkResponse, OrderResponseStatus, OrderUpdate, ScheduleCancel, SendAsset,
-        SendToken, SpotSend, UsdSend, UserBalance,
+        BasicOrder, BatchCancel, BatchCancelCloid, BatchModify, BatchOrder, Fill, InfoRequest,
+        OrderResponseStatus, OrderUpdate, ScheduleCancel, SendAsset, SendToken, SpotSend, UsdSend,
+        UserBalance,
     },
 };
 
@@ -556,6 +558,59 @@ impl Client {
         Ok(data.balances)
     }
 
+    /// Retrieves the multi-signature wallet configuration for a user.
+    ///
+    /// Returns the list of authorized signers and the signature threshold required
+    /// for executing transactions on behalf of a multisig account.
+    ///
+    /// # Arguments
+    ///
+    /// * `user` - The address of the multisig account to query
+    ///
+    /// # Returns
+    ///
+    /// Returns a [`MultiSigConfig`] containing:
+    /// - `authorized_users`: Addresses authorized to sign for this multisig
+    /// - `threshold`: Minimum number of signatures required to execute transactions
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use hypersdk::hypercore;
+    ///
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let client = hypercore::mainnet();
+    /// let multisig_addr = "0x1234567890abcdef1234567890abcdef12345678".parse()?;
+    ///
+    /// // Get multisig configuration
+    /// let config = client.multi_sig_config(multisig_addr).await?;
+    ///
+    /// println!("Multisig requires {} of {} signatures",
+    ///     config.threshold,
+    ///     config.authorized_users.len()
+    /// );
+    ///
+    /// for (i, signer) in config.authorized_users.iter().enumerate() {
+    ///     println!("Authorized signer {}: {:?}", i + 1, signer);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn multi_sig_config(&self, user: Address) -> Result<MultiSigConfig> {
+        let mut api_url = self.base_url.clone();
+        api_url.set_path("/info");
+
+        let resp = self
+            .http_client
+            .post(api_url)
+            .json(&InfoRequest::UserToMultiSigSigners { user })
+            .send()
+            .await?
+            .json()
+            .await?;
+        Ok(resp)
+    }
+
     /// Schedule cancellation.
     pub async fn schedule_cancel<S: SignerSync>(
         &self,
@@ -566,7 +621,7 @@ impl Client {
         expires_after: Option<DateTime<Utc>>,
     ) -> Result<()> {
         let resp = self
-            .sign_and_send(
+            .sign_and_send_sync(
                 signer,
                 ScheduleCancel {
                     time: Some(when.timestamp_millis() as u64),
@@ -629,8 +684,7 @@ impl Client {
     {
         let cloids: Vec<_> = batch.orders.iter().map(|req| req.cloid).collect();
 
-        let future = self.sign_and_send(signer, batch, nonce, vault_address, expires_after);
-
+        let future = self.sign_and_send_sync(signer, batch, nonce, vault_address, expires_after);
         async move {
             let resp = future.await.map_err(|err| ActionError {
                 ids: cloids.clone(),
@@ -660,7 +714,7 @@ impl Client {
     {
         let oids: Vec<_> = batch.cancels.iter().map(|req| req.oid).collect();
 
-        let future = self.sign_and_send(signer, batch, nonce, vault_address, expires_after);
+        let future = self.sign_and_send_sync(signer, batch, nonce, vault_address, expires_after);
 
         async move {
             let resp = future.await.map_err(|err| ActionError {
@@ -691,7 +745,7 @@ impl Client {
     {
         let cloids: Vec<_> = batch.cancels.iter().map(|req| req.cloid).collect();
 
-        let future = self.sign_and_send(signer, batch, nonce, vault_address, expires_after);
+        let future = self.sign_and_send_sync(signer, batch, nonce, vault_address, expires_after);
 
         async move {
             let resp = future.await.map_err(|err| ActionError {
@@ -722,7 +776,7 @@ impl Client {
     {
         let cloids: Vec<_> = batch.modifies.iter().map(|req| req.oid).collect();
 
-        let future = self.sign_and_send(signer, batch, nonce, vault_address, expires_after);
+        let future = self.sign_and_send_sync(signer, batch, nonce, vault_address, expires_after);
 
         async move {
             let resp = future.await.map_err(|err| ActionError {
@@ -844,13 +898,7 @@ impl Client {
         nonce: u64,
     ) -> Result<()> {
         let resp = self
-            .sign_and_send(
-                signer,
-                send.into_action(self.chain.arbitrum_id(), self.chain),
-                nonce,
-                None,
-                None,
-            )
+            .sign_and_send_sync(signer, send.into_action(self.chain), nonce, None, None)
             .await?;
         match resp {
             ApiResponse::Ok(OkResponse::Default) => Ok(()),
@@ -872,13 +920,8 @@ impl Client {
         send: SendAsset,
         nonce: u64,
     ) -> impl Future<Output = Result<()>> + Send + 'static {
-        let future = self.sign_and_send(
-            signer,
-            send.into_action(self.chain.arbitrum_id(), self.chain),
-            nonce,
-            None,
-            None,
-        );
+        let future =
+            self.sign_and_send_sync(signer, send.into_action(self.chain), nonce, None, None);
 
         async move {
             let resp = future.await?;
@@ -903,13 +946,8 @@ impl Client {
         send: SpotSend,
         nonce: u64,
     ) -> impl Future<Output = Result<()>> + Send + 'static {
-        let future = self.sign_and_send(
-            signer,
-            send.into_action(self.chain.arbitrum_id(), self.chain),
-            nonce,
-            None,
-            None,
-        );
+        let future =
+            self.sign_and_send_sync(signer, send.into_action(self.chain), nonce, None, None);
 
         async move {
             let resp = future.await?;
@@ -933,7 +971,7 @@ impl Client {
         expires_after: Option<DateTime<Utc>>,
     ) -> Result<()> {
         let resp = self
-            .sign_and_send(
+            .sign_and_send_sync(
                 signer,
                 Action::EvmUserModify {
                     using_big_blocks: toggle,
@@ -962,7 +1000,7 @@ impl Client {
         expires_after: Option<DateTime<Utc>>,
     ) -> Result<()> {
         let resp = self
-            .sign_and_send(signer, Action::Noop, nonce, vault_address, expires_after)
+            .sign_and_send_sync(signer, Action::Noop, nonce, vault_address, expires_after)
             .await?;
 
         match resp {
@@ -1025,7 +1063,7 @@ impl Client {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn multi_sig<'a, S: SignerSync + Signer>(
+    pub fn multi_sig<'a, S: Signer + Send + Sync>(
         &'a self,
         lead: &'a S,
         multi_sig_user: Address,
@@ -1042,7 +1080,7 @@ impl Client {
     }
 
     /// Send a signed action hashing.
-    fn sign_and_send<S: SignerSync, A: Signable>(
+    fn sign_and_send_sync<S: SignerSync, A: Signable>(
         &self,
         signer: &S,
         action: A,
@@ -1050,7 +1088,7 @@ impl Client {
         maybe_vault_address: Option<Address>,
         maybe_expires_after: Option<DateTime<Utc>>,
     ) -> impl Future<Output = Result<ApiResponse>> + Send + 'static {
-        let res = action.sign(
+        let res = action.sign_sync(
             signer,
             nonce,
             maybe_vault_address,
@@ -1076,6 +1114,46 @@ impl Client {
                 .await?;
             Ok(res)
         }
+    }
+
+    /// Send a signed action hashing.
+    async fn sign_and_send<S: Signer + Send + Sync, A: Signable>(
+        &self,
+        signer: &S,
+        action: A,
+        nonce: u64,
+        maybe_vault_address: Option<Address>,
+        maybe_expires_after: Option<DateTime<Utc>>,
+    ) -> Result<ApiResponse> {
+        let req = action
+            .sign(
+                signer,
+                nonce,
+                maybe_vault_address,
+                maybe_expires_after,
+                self.chain,
+            )
+            .await?;
+
+        self.send(req).await
+    }
+
+    pub async fn send(&self, req: ActionRequest) -> Result<ApiResponse> {
+        let http_client = self.http_client.clone();
+        let mut url = self.base_url.clone();
+        url.set_path("/exchange");
+
+        let res = http_client
+            .post(url)
+            .timeout(Duration::from_secs(5))
+            // .header(header::CONTENT_TYPE, "application/json")
+            // .body(text)
+            .json(&req)
+            .send()
+            .await?
+            .json()
+            .await?;
+        Ok(res)
     }
 
     // TODO: https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint#retrieve-a-users-subaccounts
@@ -1128,7 +1206,7 @@ impl Client {
 /// - All signers (including lead) must be authorized on the multisig wallet
 /// - The order of signers should match the wallet's configuration
 /// - Nonce must be unique for each transaction (typically millisecond timestamp)
-pub struct MultiSig<'a, S: SignerSync + Signer> {
+pub struct MultiSig<'a, S: Signer + Send + Sync> {
     lead: &'a S,
     multi_sig_user: Address,
     signers: VecDeque<&'a S>,
@@ -1139,7 +1217,7 @@ pub struct MultiSig<'a, S: SignerSync + Signer> {
 
 impl<'a, S> MultiSig<'a, S>
 where
-    S: SignerSync + Signer,
+    S: Signer + Send + Sync,
 {
     /// Add a single signer to the multisig transaction.
     ///
@@ -1311,16 +1389,15 @@ where
     ///     }
     /// }
     /// ```
-    pub fn place(
+    pub async fn place(
         &self,
         batch: BatchOrder,
         vault_address: Option<Address>,
         expires_after: Option<DateTime<Utc>>,
-    ) -> impl Future<Output = Result<Vec<OrderResponseStatus>, ActionError<Cloid>>> + Send + 'static
-    {
+    ) -> Result<Vec<OrderResponseStatus>, ActionError<Cloid>> {
         let cloids: Vec<_> = batch.orders.iter().map(|req| req.cloid).collect();
 
-        let res = multisig_collect_signatures(
+        let action = multisig_collect_signatures(
             self.lead.address(),
             self.multi_sig_user,
             self.signers.iter().copied(),
@@ -1329,29 +1406,28 @@ where
             self.nonce,
             self.client.chain,
         )
-        .map(|action| {
-            self.client
-                .sign_and_send(&self.lead, action, self.nonce, vault_address, expires_after)
-        });
+        .await
+        .map_err(|err| ActionError {
+            ids: cloids.clone(),
+            err: err.to_string(),
+        })?;
 
-        async move {
-            let future = res.map_err(|err| ActionError {
+        let resp = self
+            .client
+            .sign_and_send(self.lead, action, self.nonce, vault_address, expires_after)
+            .await
+            .map_err(|err| ActionError {
                 ids: cloids.clone(),
                 err: err.to_string(),
             })?;
-            let resp = future.await.map_err(|err| ActionError {
-                ids: cloids.clone(),
-                err: err.to_string(),
-            })?;
 
-            match resp {
-                ApiResponse::Ok(OkResponse::Order { statuses }) => Ok(statuses),
-                ApiResponse::Err(err) => Err(ActionError { ids: cloids, err }),
-                _ => Err(ActionError {
-                    ids: cloids,
-                    err: format!("unexpected response type: {resp:?}"),
-                }),
-            }
+        match resp {
+            ApiResponse::Ok(OkResponse::Order { statuses }) => Ok(statuses),
+            ApiResponse::Err(err) => Err(ActionError { ids: cloids, err }),
+            _ => Err(ActionError {
+                ids: cloids,
+                err: format!("unexpected response type: {resp:?}"),
+            }),
         }
     }
 
@@ -1405,32 +1481,28 @@ where
     /// - Time should typically be the current timestamp in milliseconds
     /// - Destination can be any valid Ethereum address
     /// - Amount is in USDC (6 decimals on-chain, but use regular decimal representation)
-    pub fn send_usdc(&self, send: UsdSend) -> impl Future<Output = Result<()>> + Send + 'static {
+    pub async fn send_usdc(&self, send: UsdSend) -> Result<()> {
         let nonce = send.time;
-        let res = multisig_collect_signatures(
+        let action = multisig_collect_signatures(
             self.lead.address(),
             self.multi_sig_user,
             self.signers.iter().copied(),
             self.signatures.iter().copied(),
-            send.into_action(self.client.chain().arbitrum_id(), self.client.chain())
-                .into(),
+            send.into_action(self.client.chain()).into(),
             nonce,
             self.client.chain,
         )
-        .map(|action| {
-            self.client
-                .sign_and_send(&self.lead, action, self.nonce, None, None)
-        });
+        .await?;
 
-        async move {
-            let future = res?;
-            let resp = future.await?;
+        let resp = self
+            .client
+            .sign_and_send(self.lead, action, self.nonce, None, None)
+            .await?;
 
-            match resp {
-                ApiResponse::Ok(OkResponse::Default) => Ok(()),
-                ApiResponse::Err(err) => anyhow::bail!("send_usdc: {err}"),
-                _ => anyhow::bail!("send_usdc: unexpected response type: {resp:?}"),
-            }
+        match resp {
+            ApiResponse::Ok(OkResponse::Default) => Ok(()),
+            ApiResponse::Err(err) => anyhow::bail!("send_usdc: {err}"),
+            _ => anyhow::bail!("send_usdc: unexpected response type: {resp:?}"),
         }
     }
 
@@ -1493,32 +1565,28 @@ where
     /// - Source/destination DEX can be: "" (perp balance), "spot", or other DEX identifiers
     /// - Token must be obtained from `spot_meta()` API call
     /// - Nonce should be unique for each transaction (typically current timestamp in ms)
-    pub fn send_asset(&self, send: SendAsset) -> impl Future<Output = Result<()>> + Send + 'static {
+    pub async fn send_asset(&self, send: SendAsset) -> Result<()> {
         let nonce = send.nonce;
-        let res = multisig_collect_signatures(
+        let action = multisig_collect_signatures(
             self.lead.address(),
             self.multi_sig_user,
             self.signers.iter().copied(),
             self.signatures.iter().copied(),
-            send.into_action(self.client.chain().arbitrum_id(), self.client.chain())
-                .into(),
+            send.into_action(self.client.chain()).into(),
             nonce,
             self.client.chain,
         )
-        .map(|action| {
-            self.client
-                .sign_and_send(&self.lead, action, self.nonce, None, None)
-        });
+        .await?;
 
-        async move {
-            let future = res?;
-            let resp = future.await?;
+        let resp = self
+            .client
+            .sign_and_send(self.lead, action, self.nonce, None, None)
+            .await?;
 
-            match resp {
-                ApiResponse::Ok(OkResponse::Default) => Ok(()),
-                ApiResponse::Err(err) => anyhow::bail!("send_asset: {err}"),
-                _ => anyhow::bail!("send_asset: unexpected response type: {resp:?}"),
-            }
+        match resp {
+            ApiResponse::Ok(OkResponse::Default) => Ok(()),
+            ApiResponse::Err(err) => anyhow::bail!("send_asset: {err}"),
+            _ => anyhow::bail!("send_asset: unexpected response type: {resp:?}"),
         }
     }
 }

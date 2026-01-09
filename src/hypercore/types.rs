@@ -70,17 +70,18 @@ use std::{
 use alloy::{
     dyn_abi::{Eip712Domain, TypedData},
     primitives::{Address, B128, B256, U256},
-    signers::{SignerSync, k256::ecdsa::RecoveryId},
+    signers::{Signer, SignerSync, k256::ecdsa::RecoveryId},
     sol_types::eip712_domain,
 };
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
-use serde_with::{DisplayFromStr, serde_as};
+use serde_with::serde_as;
 
 use crate::hypercore::{
     Chain, Cloid, OidOrCloid, SpotToken,
-    signing::{Signable, sign_rmp},
+    raw::{SendAssetAction, SpotSendAction, UsdSendAction},
+    signing::{Signable, sign_rmp, sign_rmp_sync},
     utils,
 };
 
@@ -104,7 +105,7 @@ pub(super) const ARBITRUM_MAINNET_EIP712_DOMAIN: Eip712Domain = eip712_domain! {
 
 /// Domain for L1 multisig mainnet EIP‑712 signing.
 /// This domain is used when creating multisig signatures on mainnet (chainId 0x66eee = 421614).
-pub(super) const MULTISIG_MAINNET_EIP712_DOMAIN: Eip712Domain = eip712_domain! {
+pub const MULTISIG_MAINNET_EIP712_DOMAIN: Eip712Domain = eip712_domain! {
     name: "HyperliquidSignTransaction",
     version: "1",
     chain_id: 421614,
@@ -1219,6 +1220,7 @@ impl OrderStatus {
 /// use the `into_action()` method to convert it to a `UsdSendAction`.
 ///
 /// <https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint#core-usdc-transfer>
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UsdSend {
     pub destination: Address,
     pub amount: Decimal,
@@ -1245,13 +1247,9 @@ impl UsdSend {
     /// let action = send.into_action(ARBITRUM_MAINNET_CHAIN_ID, Chain::Mainnet);
     /// ```
     #[must_use]
-    pub(super) fn into_action(
-        self,
-        signature_chain_id: &'static str,
-        chain: Chain,
-    ) -> UsdSendAction {
+    pub fn into_action(self, chain: Chain) -> UsdSendAction {
         UsdSendAction {
-            signature_chain_id,
+            signature_chain_id: chain.arbitrum_id().to_owned(),
             hyperliquid_chain: chain,
             destination: self.destination,
             amount: self.amount,
@@ -1266,6 +1264,7 @@ impl UsdSend {
 /// use the `into_action()` method to convert it to a `SpotSendAction`.
 ///
 /// <https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint#core-spot-transfer>
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpotSend {
     /// The destination address.
     pub destination: Address,
@@ -1298,16 +1297,12 @@ impl SpotSend {
     /// let action = send.into_action(ARBITRUM_MAINNET_CHAIN_ID, Chain::Mainnet);
     /// ```
     #[must_use]
-    pub(super) fn into_action(
-        self,
-        signature_chain_id: &'static str,
-        chain: Chain,
-    ) -> SpotSendAction {
+    pub fn into_action(self, chain: Chain) -> SpotSendAction {
         SpotSendAction {
-            signature_chain_id,
+            signature_chain_id: chain.arbitrum_id().to_owned(),
             hyperliquid_chain: chain,
             destination: self.destination,
-            token: self.token,
+            token: self.token.to_string(),
             amount: self.amount,
             time: self.time,
         }
@@ -1321,6 +1316,7 @@ impl SpotSend {
 /// use the `into_action()` method to convert it to a `SendAssetAction`.
 ///
 /// <https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint#send-asset>
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SendAsset {
     /// The destination address.
     pub destination: Address,
@@ -1362,18 +1358,14 @@ impl SendAsset {
     /// let action = send.into_action(ARBITRUM_MAINNET_CHAIN_ID, Chain::Mainnet);
     /// ```
     #[must_use]
-    pub(super) fn into_action(
-        self,
-        signature_chain_id: &'static str,
-        chain: Chain,
-    ) -> SendAssetAction {
+    pub fn into_action(self, chain: Chain) -> SendAssetAction {
         SendAssetAction {
-            signature_chain_id,
+            signature_chain_id: chain.arbitrum_id().to_owned(),
             hyperliquid_chain: chain,
             destination: self.destination,
             source_dex: self.source_dex,
             destination_dex: self.destination_dex,
-            token: self.token,
+            token: self.token.to_string(),
             amount: self.amount,
             from_sub_account: self.from_sub_account,
             nonce: self.nonce,
@@ -1516,7 +1508,7 @@ impl OrderResponseStatus {
 ///     grouping: OrderGrouping::Na,
 /// };
 /// ```
-#[derive(Clone, Serialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct BatchOrder {
     pub orders: Vec<OrderRequest>,
@@ -1526,7 +1518,7 @@ pub struct BatchOrder {
 /// Order grouping strategy.
 ///
 /// Determines how orders are grouped when sent in a batch.
-#[derive(Clone, Serialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub enum OrderGrouping {
     Na,
@@ -1537,7 +1529,7 @@ pub enum OrderGrouping {
 /// Order request.
 ///
 /// Represents a single order within a batch.
-#[derive(Clone, Serialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 #[serde_as]
 pub struct OrderRequest {
@@ -1554,14 +1546,17 @@ pub struct OrderRequest {
     #[serde(rename = "t")]
     pub order_type: OrderTypePlacement,
     #[serde(rename = "c")]
-    #[serde(serialize_with = "super::utils::serialize_cloid_as_hex")]
+    #[serde(
+        serialize_with = "super::utils::serialize_cloid_as_hex",
+        deserialize_with = "super::utils::deserialize_cloid_from_hex"
+    )]
     pub cloid: Cloid,
 }
 
 /// Order type for the placement.
 ///
 /// Specifies whether the order is limit or trigger and its associated parameters.
-#[derive(Serialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub enum OrderTypePlacement {
     Limit {
@@ -1588,7 +1583,7 @@ pub enum TpSl {
 /// Batch modify request.
 ///
 /// Contains a list of order modifications to be applied.
-#[derive(Clone, Serialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct BatchModify {
     pub modifies: Vec<Modify>,
@@ -1597,7 +1592,7 @@ pub struct BatchModify {
 /// Individual order modification.
 ///
 /// References the order by ID and includes the new order data.
-#[derive(Clone, Serialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Modify {
     pub oid: OidOrCloid,
@@ -1607,7 +1602,7 @@ pub struct Modify {
 /// Batch cancel request.
 ///
 /// Contains a list of order IDs to cancel.
-#[derive(Serialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct BatchCancel {
     pub cancels: Vec<Cancel>,
@@ -1616,7 +1611,7 @@ pub struct BatchCancel {
 /// Batch cancel by cloid request.
 ///
 /// Contains a list of cloid values to cancel.
-#[derive(Serialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct BatchCancelCloid {
     pub cancels: Vec<CancelByCloid>,
@@ -1625,7 +1620,7 @@ pub struct BatchCancelCloid {
 /// Cancel request.
 ///
 /// References an order by asset and ID.
-#[derive(Serialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Cancel {
     #[serde(rename = "a")]
@@ -1637,7 +1632,7 @@ pub struct Cancel {
 /// Cancel request by cloid.
 ///
 /// References an order by asset and cloid.
-#[derive(Serialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct CancelByCloid {
     pub asset: u32,
@@ -1648,7 +1643,7 @@ pub struct CancelByCloid {
 /// Schedule cancellation of all orders.
 ///
 /// The optional `time` field can be used to delay the cancellation.
-#[derive(Serialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ScheduleCancel {
     pub time: Option<u64>,
@@ -1738,261 +1733,65 @@ impl UserBalance {
 /// Abstraction over a token to be sent out.
 ///
 /// This is to prevent users from f*cking it up.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SendToken(pub SpotToken);
 
 impl fmt::Display for SendToken {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:{:x}", self.0.name, self.0.token_id)
+        write!(f, "{}", self.0.name)
     }
 }
 
-// ========================================================
-// PRIVATE TYPES
-// ========================================================
-
-/// Send USDC from the perpetual balance.
+/// Multi-signature wallet configuration.
 ///
-/// This action transfers USDC from your perpetual trading balance to another address.
-/// The transfer happens on the Hyperliquid L1 and requires EIP-712 signature.
+/// Defines the authorized signers and threshold for a multisig account on Hyperliquid.
+/// A multisig account requires a minimum number of signatures (threshold) from the
+/// authorized users to execute transactions.
 ///
 /// # Fields
 ///
-/// - `signature_chain_id`: The chain ID for signature verification (use [`super::ARBITRUM_MAINNET_CHAIN_ID`] or [`super::ARBITRUM_TESTNET_CHAIN_ID`])
-/// - `hyperliquid_chain`: Whether this is mainnet or testnet
-/// - `destination`: The recipient's address
-/// - `amount`: Amount of USDC to send (in USDC, not wei)
-/// - `time`: Timestamp in milliseconds (should match the nonce)
+/// - `authorized_users`: List of addresses authorized to sign transactions for this multisig
+/// - `threshold`: Minimum number of signatures required to execute a transaction
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// use hypersdk::hypercore::types::UsdSendAction;
-/// use rust_decimal::dec;
+/// ```rust
+/// use hypersdk::hypercore::types::MultiSigConfig;
 ///
-/// let send = UsdSendAction {
-///     signature_chain_id: ARBITRUM_MAINNET_CHAIN_ID,
-///     hyperliquid_chain: Chain::Mainnet,
-///     destination: "0x1234...".parse()?,
-///     amount: dec!(100), // 100 USDC
-///     time: chrono::Utc::now().timestamp_millis() as u64,
-/// };
+/// # fn example(config: MultiSigConfig) {
+/// // Check if enough signers are authorized
+/// assert!(config.threshold <= config.authorized_users.len());
+///
+/// println!("Multisig requires {} of {} signatures",
+///     config.threshold,
+///     config.authorized_users.len()
+/// );
+/// # }
 /// ```
-///
-/// <https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint#core-usdc-transfer>
-#[derive(Serialize, Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct UsdSendAction {
-    /// Signature chain ID.
-    ///
-    /// For arbitrum use [`super::ARBITRUM_MAINNET_CHAIN_ID`] or [`super::ARBITRUM_TESTNET_CHAIN_ID`].
-    pub signature_chain_id: &'static str,
-    /// The chain this action is being executed on.
-    pub hyperliquid_chain: Chain,
-    /// The destination address.
-    #[serde(serialize_with = "super::utils::serialize_address_as_hex")]
-    pub destination: Address,
-    /// The amount.
-    #[serde(with = "rust_decimal::serde::str")]
-    pub amount: Decimal,
-    /// Current time, should match the nonce
-    pub time: u64,
-}
-
-/// Send spot tokens to another address.
-///
-/// This action transfers spot tokens (like PURR, HYPE, etc.) from your spot balance
-/// to another address. The transfer happens on the Hyperliquid L1 and requires EIP-712 signature.
-///
-/// # Fields
-///
-/// - `signature_chain_id`: The chain ID for signature verification (use [`super::ARBITRUM_MAINNET_CHAIN_ID`] or [`super::ARBITRUM_TESTNET_CHAIN_ID`])
-/// - `hyperliquid_chain`: Whether this is mainnet or testnet
-/// - `destination`: The recipient's address
-/// - `token`: The spot token to send (wrapped in `SendToken`)
-/// - `amount`: Amount to send (in token's native units)
-/// - `time`: Timestamp in milliseconds (should match the nonce)
-///
-/// # Example
-///
-/// ```rust,ignore
-/// use hypersdk::hypercore::types::{SpotSendAction, SendToken};
-/// use rust_decimal::dec;
-///
-/// let send = SpotSendAction {
-///     signature_chain_id: ARBITRUM_MAINNET_CHAIN_ID,
-///     hyperliquid_chain: Chain::Mainnet,
-///     destination: "0x1234...".parse()?,
-///     token: SendToken(purr_token),
-///     amount: dec!(1000),
-///     time: chrono::Utc::now().timestamp_millis() as u64,
-/// };
-/// ```
-///
-/// <https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint#core-spot-transfer>
-#[serde_as]
-#[derive(Serialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct SpotSendAction {
-    /// Signature chain ID.
-    ///
-    /// For arbitrum use [`super::ARBITRUM_MAINNET_CHAIN_ID`] or [`super::ARBITRUM_TESTNET_CHAIN_ID`].
-    pub signature_chain_id: &'static str,
-    /// The chain this action is being executed on.
-    pub hyperliquid_chain: Chain,
-    /// The destination address.
-    #[serde(serialize_with = "super::utils::serialize_address_as_hex")]
-    pub destination: Address,
-    /// Token
-    #[serde_as(as = "DisplayFromStr")]
-    pub token: SendToken,
-    /// The amount.
-    #[serde(with = "rust_decimal::serde::str")]
-    pub amount: Decimal,
-    /// Current time, should match the nonce
-    pub time: u64,
-}
-
-/// Send asset.
-///
-/// <https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint#send-asset>
-#[serde_as]
-#[derive(Serialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct SendAssetAction {
-    /// Signature chain ID.
-    ///
-    /// For arbitrum use [`super::ARBITRUM_MAINNET_CHAIN_ID`] or [`super::ARBITRUM_TESTNET_CHAIN_ID`].
-    pub signature_chain_id: &'static str,
-    /// The chain this action is being executed on.
-    pub hyperliquid_chain: Chain,
-    /// The destination address.
-    #[serde(serialize_with = "super::utils::serialize_address_as_hex")]
-    pub destination: Address,
-    /// Source DEX, can be empty
-    pub source_dex: String,
-    /// Destiation DEX, can be empty
-    pub destination_dex: String,
-    /// Token
-    #[serde_as(as = "DisplayFromStr")]
-    pub token: SendToken,
-    /// The amount.
-    #[serde(with = "rust_decimal::serde::str")]
-    pub amount: Decimal,
-    /// From subaccount, can be empty
-    pub from_sub_account: String,
-    /// Request nonce
-    pub nonce: u64,
-}
-
-/// Request for an action.
-///
-/// Contains the action, a nonce, signature, optional vault address, and optional expiry.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct ActionRequest {
-    /// Action.
-    pub action: Action,
-    /// Nonce of the message.
-    pub nonce: u64,
-    /// Signature
-    pub signature: Signature,
-    /// Trading on behalf of
-    pub vault_address: Option<Address>,
-    /// Timestamp in milliseconds
-    pub expires_after: Option<u64>,
-}
-
-/// API response wrapper.
-///
-/// The `Ok` variant contains a successful response, while `Err` holds an error message.
-#[derive(Debug, Deserialize)]
-#[serde(tag = "status", content = "response")]
-#[serde(rename_all = "camelCase")]
-pub(super) enum ApiResponse {
-    Ok(OkResponse),
-    Err(String),
-}
-
-/// Successful API response data.
-///
-/// Currently supports order responses and a default placeholder.
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type", content = "data")]
-#[serde(rename_all = "camelCase")]
-pub(super) enum OkResponse {
-    Order { statuses: Vec<OrderResponseStatus> },
-    // should be ok?
-    Default,
-}
-
-/// Info endpoint request types.
-///
-/// Used for querying various types of information from the API.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-#[serde(tag = "type")]
-pub(super) enum InfoRequest {
-    Meta {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        dex: Option<String>,
-    },
-    SpotMeta,
-    PerpDexs,
-    FrontendOpenOrders {
-        user: Address,
-    },
-    HistoricalOrders {
-        user: Address,
-    },
-    UserFills {
-        user: Address,
-    },
-    OrderStatus {
-        user: Address,
-        #[serde(with = "either::serde_untagged")]
-        oid: OidOrCloid,
-    },
-    SpotClearinghouseState {
-        user: Address,
-    },
-    AllMids,
-    CandleSnapshot {
-        req: CandleSnapshotRequest,
-    },
-}
-
-/// Candle snapshot request parameters.
-///
-/// Used to query historical candlestick data from the API.
-///
-/// # Notes
-///
-/// - Only the most recent 5000 candles are available
-/// - Times are in milliseconds
-/// - For HIP-3 assets, prefix the coin with dex name (e.g., "xyz:XYZ100")
-#[derive(Serialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct CandleSnapshotRequest {
-    /// Market symbol (e.g., "BTC", "ETH")
-    pub coin: String,
-    /// Candle interval (e.g., "1m", "15m", "1h", "1d")
-    pub interval: CandleInterval,
-    /// Start time in milliseconds
-    pub start_time: u64,
-    /// End time in milliseconds
-    pub end_time: u64,
+pub struct MultiSigConfig {
+    /// Addresses authorized to sign for this multisig account
+    pub authorized_users: Vec<Address>,
+    /// Minimum number of signatures required (e.g., 2 for 2-of-3)
+    pub threshold: usize,
 }
 
 /// Signature.
 ///
 /// Represents an EIP‑712 signature split into its components.
-#[derive(Clone, Copy, Serialize)]
+#[derive(Clone, Copy, Serialize, Deserialize)]
 #[serde_as]
 pub struct Signature {
-    #[serde(serialize_with = "super::utils::serialize_as_hex")]
+    #[serde(
+        serialize_with = "super::utils::serialize_as_hex",
+        deserialize_with = "super::utils::deserialize_from_hex"
+    )]
     pub r: U256,
-    #[serde(serialize_with = "super::utils::serialize_as_hex")]
+    #[serde(
+        serialize_with = "super::utils::serialize_as_hex",
+        deserialize_with = "super::utils::deserialize_from_hex"
+    )]
     pub s: U256,
     pub v: u64,
 }
@@ -2075,191 +1874,569 @@ impl From<alloy::signers::Signature> for Signature {
     }
 }
 
-/// Multi-signature action payload.
+// ========================================================
+// PRIVATE TYPES
+// ========================================================
+
+/// Candle snapshot request parameters.
 ///
-/// Contains the multisig user address, outer signer, and the inner action to execute.
-#[derive(Clone, Serialize, Debug)]
+/// Used to query historical candlestick data from the API.
+///
+/// # Notes
+///
+/// - Only the most recent 5000 candles are available
+/// - Times are in milliseconds
+/// - For HIP-3 assets, prefix the coin with dex name (e.g., "xyz:XYZ100")
+#[derive(Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct MultiSigPayload {
-    /// The multisig account address
-    pub multi_sig_user: String,
-    /// The address executing the multisig action
-    pub outer_signer: String,
-    /// The inner action to execute
-    pub action: Box<Action>,
+pub struct CandleSnapshotRequest {
+    /// Market symbol (e.g., "BTC", "ETH")
+    pub coin: String,
+    /// Candle interval (e.g., "1m", "15m", "1h", "1d")
+    pub interval: CandleInterval,
+    /// Start time in milliseconds
+    pub start_time: u64,
+    /// End time in milliseconds
+    pub end_time: u64,
 }
 
-/// Multi-signature action wrapper.
+/// Info endpoint request types.
 ///
-/// Wraps any action with multiple signatures for multisig execution.
-#[derive(Clone, Serialize, Debug)]
+/// Used for querying various types of information from the API.
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct MultiSigAction {
-    /// Signature chain ID (0x66eee for L1 multisig)
-    pub signature_chain_id: &'static str,
-    /// Signatures from authorized signers
-    pub signatures: Vec<Signature>,
-    /// The multisig payload
-    pub payload: MultiSigPayload,
-}
-
-/// An action that requires signing.
-///
-/// Represents a request to the exchange that must be signed by the user.
-#[derive(Clone, Serialize, Debug, derive_more::From)]
 #[serde(tag = "type")]
-#[serde(rename_all = "camelCase")]
-pub(super) enum Action {
-    /// Order insertion.
-    Order(BatchOrder),
-    /// Order modification.
-    BatchModify(BatchModify),
-    /// Order cancellation by oid.
-    Cancel(BatchCancel),
-    /// Order cancellation by cloid.
-    CancelByCloid(BatchCancelCloid),
-    /// Schedule cancellation of all orders.
-    ScheduleCancel(ScheduleCancel),
-    /// Core USDC transfer.
-    UsdSend(UsdSendAction),
-    /// Send asset.
-    SendAsset(SendAssetAction),
-    /// Spot send.
-    SpotSend(SpotSendAction),
-    /// EVM user modify.
-    EvmUserModify { using_big_blocks: bool },
-    /// Multi-sig action.
-    MultiSig(MultiSigAction),
-    /// Invalidate a request.
-    Noop,
+pub(super) enum InfoRequest {
+    Meta {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        dex: Option<String>,
+    },
+    SpotMeta,
+    PerpDexs,
+    FrontendOpenOrders {
+        user: Address,
+    },
+    HistoricalOrders {
+        user: Address,
+    },
+    UserFills {
+        user: Address,
+    },
+    OrderStatus {
+        user: Address,
+        #[serde(with = "either::serde_untagged")]
+        oid: OidOrCloid,
+    },
+    SpotClearinghouseState {
+        user: Address,
+    },
+    AllMids,
+    CandleSnapshot {
+        req: CandleSnapshotRequest,
+    },
+    UserToMultiSigSigners {
+        user: Address,
+    },
 }
 
-impl Action {
-    /// Hash the action for signing.
+/// Raw API types.
+pub mod raw {
+    use super::*;
+
+    /// Request for an action.
     ///
-    /// The hash is generated by serializing the action to MessagePack, appending the nonce,
-    /// optional vault address, and optional expiry, then Keccak256 hashing.
-    #[inline]
-    pub fn hash(
-        &self,
-        nonce: u64,
-        maybe_vault_address: Option<Address>,
-        maybe_expires_after: Option<u64>,
-    ) -> Result<B256, rmp_serde::encode::Error> {
-        utils::rmp_hash(self, nonce, maybe_vault_address, maybe_expires_after)
+    /// Contains the action, a nonce, signature, optional vault address, and optional expiry.
+    #[derive(Debug, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct ActionRequest {
+        /// Action.
+        pub action: Action,
+        /// Nonce of the message.
+        pub nonce: u64,
+        /// Signature
+        pub signature: Signature,
+        /// Trading on behalf of
+        pub vault_address: Option<Address>,
+        /// Timestamp in milliseconds
+        pub expires_after: Option<u64>,
     }
-}
 
-impl Action {
-    /// Returns the typed data for multisig signing, if applicable.
+    /// An action that requires signing.
     ///
-    /// Only EIP-712 typed data actions (UsdSend, SpotSend, SendAsset) support multisig typed data.
-    /// All other actions (orders, cancels, modifications) return None and use RMP hash signing.
-    pub fn typed_data_multisig(&self, multi_sig_user: Address, lead: Address) -> Option<TypedData> {
-        let multi_sig = Some((multi_sig_user, lead));
+    /// Represents a request to the exchange that must be signed by the user.
+    #[derive(Debug, Clone, Serialize, Deserialize, derive_more::From)]
+    #[serde(tag = "type")]
+    #[serde(rename_all = "camelCase")]
+    pub enum Action {
+        /// Order insertion.
+        Order(BatchOrder),
+        /// Order modification.
+        BatchModify(BatchModify),
+        /// Order cancellation by oid.
+        Cancel(BatchCancel),
+        /// Order cancellation by cloid.
+        CancelByCloid(BatchCancelCloid),
+        /// Schedule cancellation of all orders.
+        ScheduleCancel(ScheduleCancel),
+        /// Core USDC transfer.
+        UsdSend(UsdSendAction),
+        /// Send asset.
+        SendAsset(SendAssetAction),
+        /// Spot send.
+        SpotSend(SpotSendAction),
+        /// EVM user modify.
+        EvmUserModify { using_big_blocks: bool },
+        /// Multi-sig action.
+        MultiSig(MultiSigAction),
+        /// Invalidate a request.
+        Noop,
+    }
 
-        match self {
-            Action::UsdSend(inner) => Some(utils::get_typed_data::<solidity::multisig::UsdSend>(
-                inner, multi_sig,
-            )),
-            Action::SpotSend(inner) => Some(utils::get_typed_data::<solidity::multisig::SpotSend>(
-                inner, multi_sig,
-            )),
-            Action::SendAsset(inner) => Some(
-                utils::get_typed_data::<solidity::multisig::SendAsset>(inner, multi_sig),
-            ),
-            // All other actions use RMP signing
-            _ => None,
+    impl Action {
+        /// Hash the action for signing.
+        ///
+        /// The hash is generated by serializing the action to MessagePack, appending the nonce,
+        /// optional vault address, and optional expiry, then Keccak256 hashing.
+        #[inline]
+        pub fn hash(
+            &self,
+            nonce: u64,
+            maybe_vault_address: Option<Address>,
+            maybe_expires_after: Option<u64>,
+        ) -> Result<B256, rmp_serde::encode::Error> {
+            utils::rmp_hash(self, nonce, maybe_vault_address, maybe_expires_after)
         }
     }
-}
 
-impl Signable for Action {
-    fn sign<S: SignerSync>(
-        self,
-        signer: &S,
-        nonce: u64,
-        maybe_vault_address: Option<Address>,
-        maybe_expires_after: Option<DateTime<Utc>>,
-        chain: Chain,
-    ) -> anyhow::Result<ActionRequest> {
-        // Top-down delegation: Action dispatches to each variant's sign implementation
-        match self {
-            Action::Order(inner) => inner.sign(
-                signer,
-                nonce,
-                maybe_vault_address,
-                maybe_expires_after,
-                chain,
-            ),
-            Action::BatchModify(inner) => inner.sign(
-                signer,
-                nonce,
-                maybe_vault_address,
-                maybe_expires_after,
-                chain,
-            ),
-            Action::Cancel(inner) => inner.sign(
-                signer,
-                nonce,
-                maybe_vault_address,
-                maybe_expires_after,
-                chain,
-            ),
-            Action::CancelByCloid(inner) => inner.sign(
-                signer,
-                nonce,
-                maybe_vault_address,
-                maybe_expires_after,
-                chain,
-            ),
-            Action::ScheduleCancel(inner) => inner.sign(
-                signer,
-                nonce,
-                maybe_vault_address,
-                maybe_expires_after,
-                chain,
-            ),
-            Action::UsdSend(inner) => inner.sign(
-                signer,
-                nonce,
-                maybe_vault_address,
-                maybe_expires_after,
-                chain,
-            ),
-            Action::SendAsset(inner) => inner.sign(
-                signer,
-                nonce,
-                maybe_vault_address,
-                maybe_expires_after,
-                chain,
-            ),
-            Action::SpotSend(inner) => inner.sign(
-                signer,
-                nonce,
-                maybe_vault_address,
-                maybe_expires_after,
-                chain,
-            ),
-            Action::MultiSig(inner) => inner.sign(
-                signer,
-                nonce,
-                maybe_vault_address,
-                maybe_expires_after,
-                chain,
-            ),
-            Action::EvmUserModify { .. } | Action::Noop => {
-                // These variants use RMP signing directly
-                sign_rmp(
+    impl Action {
+        /// Returns the typed data for multisig signing, if applicable.
+        ///
+        /// Only EIP-712 typed data actions (UsdSend, SpotSend, SendAsset) support multisig typed data.
+        /// All other actions (orders, cancels, modifications) return None and use RMP hash signing.
+        pub fn typed_data_multisig(
+            &self,
+            multi_sig_user: Address,
+            lead: Address,
+        ) -> Option<TypedData> {
+            let multi_sig = Some((multi_sig_user, lead));
+
+            match self {
+                Action::UsdSend(inner) => Some(
+                    utils::get_typed_data::<solidity::multisig::UsdSend>(inner, multi_sig),
+                ),
+                Action::SpotSend(inner) => Some(utils::get_typed_data::<
+                    solidity::multisig::SpotSend,
+                >(inner, multi_sig)),
+                Action::SendAsset(inner) => Some(utils::get_typed_data::<
+                    solidity::multisig::SendAsset,
+                >(inner, multi_sig)),
+                // All other actions use RMP signing
+                _ => None,
+            }
+        }
+    }
+
+    /// API response wrapper.
+    ///
+    /// The `Ok` variant contains a successful response, while `Err` holds an error message.
+    #[derive(Debug, Deserialize)]
+    #[serde(tag = "status", content = "response")]
+    #[serde(rename_all = "camelCase")]
+    pub enum ApiResponse {
+        Ok(OkResponse),
+        Err(String),
+    }
+
+    /// Successful API response data.
+    ///
+    /// Currently supports order responses and a default placeholder.
+    #[derive(Debug, Deserialize)]
+    #[serde(tag = "type", content = "data")]
+    #[serde(rename_all = "camelCase")]
+    pub enum OkResponse {
+        Order { statuses: Vec<OrderResponseStatus> },
+        // should be ok?
+        Default,
+    }
+
+    impl Signable for Action {
+        fn sign_sync<S: SignerSync>(
+            self,
+            signer: &S,
+            nonce: u64,
+            maybe_vault_address: Option<Address>,
+            maybe_expires_after: Option<DateTime<Utc>>,
+            chain: Chain,
+        ) -> anyhow::Result<ActionRequest> {
+            // Top-down delegation: Action dispatches to each variant's sign_sync implementation
+            match self {
+                Action::Order(inner) => inner.sign_sync(
                     signer,
-                    self,
                     nonce,
                     maybe_vault_address,
                     maybe_expires_after,
                     chain,
-                )
+                ),
+                Action::BatchModify(inner) => inner.sign_sync(
+                    signer,
+                    nonce,
+                    maybe_vault_address,
+                    maybe_expires_after,
+                    chain,
+                ),
+                Action::Cancel(inner) => inner.sign_sync(
+                    signer,
+                    nonce,
+                    maybe_vault_address,
+                    maybe_expires_after,
+                    chain,
+                ),
+                Action::CancelByCloid(inner) => inner.sign_sync(
+                    signer,
+                    nonce,
+                    maybe_vault_address,
+                    maybe_expires_after,
+                    chain,
+                ),
+                Action::ScheduleCancel(inner) => inner.sign_sync(
+                    signer,
+                    nonce,
+                    maybe_vault_address,
+                    maybe_expires_after,
+                    chain,
+                ),
+                Action::UsdSend(inner) => inner.sign_sync(
+                    signer,
+                    nonce,
+                    maybe_vault_address,
+                    maybe_expires_after,
+                    chain,
+                ),
+                Action::SendAsset(inner) => inner.sign_sync(
+                    signer,
+                    nonce,
+                    maybe_vault_address,
+                    maybe_expires_after,
+                    chain,
+                ),
+                Action::SpotSend(inner) => inner.sign_sync(
+                    signer,
+                    nonce,
+                    maybe_vault_address,
+                    maybe_expires_after,
+                    chain,
+                ),
+                Action::MultiSig(inner) => inner.sign_sync(
+                    signer,
+                    nonce,
+                    maybe_vault_address,
+                    maybe_expires_after,
+                    chain,
+                ),
+                Action::EvmUserModify { .. } | Action::Noop => {
+                    // These variants use RMP signing directly
+                    sign_rmp_sync(
+                        signer,
+                        self,
+                        nonce,
+                        maybe_vault_address,
+                        maybe_expires_after,
+                        chain,
+                    )
+                }
             }
         }
+
+        async fn sign<S: Signer + Send + Sync>(
+            self,
+            signer: &S,
+            nonce: u64,
+            maybe_vault_address: Option<Address>,
+            maybe_expires_after: Option<DateTime<Utc>>,
+            chain: Chain,
+        ) -> anyhow::Result<ActionRequest> {
+            // Top-down delegation: Action dispatches to each variant's sign implementation
+            match self {
+                Action::Order(inner) => {
+                    inner
+                        .sign(
+                            signer,
+                            nonce,
+                            maybe_vault_address,
+                            maybe_expires_after,
+                            chain,
+                        )
+                        .await
+                }
+                Action::BatchModify(inner) => {
+                    inner
+                        .sign(
+                            signer,
+                            nonce,
+                            maybe_vault_address,
+                            maybe_expires_after,
+                            chain,
+                        )
+                        .await
+                }
+                Action::Cancel(inner) => {
+                    inner
+                        .sign(
+                            signer,
+                            nonce,
+                            maybe_vault_address,
+                            maybe_expires_after,
+                            chain,
+                        )
+                        .await
+                }
+                Action::CancelByCloid(inner) => {
+                    inner
+                        .sign(
+                            signer,
+                            nonce,
+                            maybe_vault_address,
+                            maybe_expires_after,
+                            chain,
+                        )
+                        .await
+                }
+                Action::ScheduleCancel(inner) => {
+                    inner
+                        .sign(
+                            signer,
+                            nonce,
+                            maybe_vault_address,
+                            maybe_expires_after,
+                            chain,
+                        )
+                        .await
+                }
+                Action::UsdSend(inner) => {
+                    inner
+                        .sign(
+                            signer,
+                            nonce,
+                            maybe_vault_address,
+                            maybe_expires_after,
+                            chain,
+                        )
+                        .await
+                }
+                Action::SendAsset(inner) => {
+                    inner
+                        .sign(
+                            signer,
+                            nonce,
+                            maybe_vault_address,
+                            maybe_expires_after,
+                            chain,
+                        )
+                        .await
+                }
+                Action::SpotSend(inner) => {
+                    inner
+                        .sign(
+                            signer,
+                            nonce,
+                            maybe_vault_address,
+                            maybe_expires_after,
+                            chain,
+                        )
+                        .await
+                }
+                Action::MultiSig(inner) => {
+                    inner
+                        .sign(
+                            signer,
+                            nonce,
+                            maybe_vault_address,
+                            maybe_expires_after,
+                            chain,
+                        )
+                        .await
+                }
+                Action::EvmUserModify { .. } | Action::Noop => {
+                    // These variants use RMP signing directly
+                    sign_rmp(
+                        signer,
+                        self,
+                        nonce,
+                        maybe_vault_address,
+                        maybe_expires_after,
+                        chain,
+                    )
+                    .await
+                }
+            }
+        }
+    }
+
+    /// Send USDC from the perpetual balance.
+    ///
+    /// This action transfers USDC from your perpetual trading balance to another address.
+    /// The transfer happens on the Hyperliquid L1 and requires EIP-712 signature.
+    ///
+    /// # Fields
+    ///
+    /// - `signature_chain_id`: The chain ID for signature verification (use [`super::ARBITRUM_MAINNET_CHAIN_ID`] or [`super::ARBITRUM_TESTNET_CHAIN_ID`])
+    /// - `hyperliquid_chain`: Whether this is mainnet or testnet
+    /// - `destination`: The recipient's address
+    /// - `amount`: Amount of USDC to send (in USDC, not wei)
+    /// - `time`: Timestamp in milliseconds (should match the nonce)
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use hypersdk::hypercore::types::UsdSendAction;
+    /// use rust_decimal::dec;
+    ///
+    /// let send = UsdSendAction {
+    ///     signature_chain_id: ARBITRUM_MAINNET_CHAIN_ID,
+    ///     hyperliquid_chain: Chain::Mainnet,
+    ///     destination: "0x1234...".parse()?,
+    ///     amount: dec!(100), // 100 USDC
+    ///     time: chrono::Utc::now().timestamp_millis() as u64,
+    /// };
+    /// ```
+    ///
+    /// <https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint#core-usdc-transfer>
+    #[derive(Serialize, Deserialize, Debug, Clone)]
+    #[serde(rename_all = "camelCase")]
+    pub struct UsdSendAction {
+        /// Signature chain ID.
+        ///
+        /// For arbitrum use [`super::ARBITRUM_MAINNET_CHAIN_ID`] or [`super::ARBITRUM_TESTNET_CHAIN_ID`].
+        pub signature_chain_id: String,
+        /// The chain this action is being executed on.
+        pub hyperliquid_chain: Chain,
+        /// The destination address.
+        #[serde(
+            serialize_with = "super::utils::serialize_address_as_hex",
+            deserialize_with = "super::utils::deserialize_address_from_hex"
+        )]
+        pub destination: Address,
+        /// The amount.
+        #[serde(with = "rust_decimal::serde::str")]
+        pub amount: Decimal,
+        /// Current time, should match the nonce
+        pub time: u64,
+    }
+
+    /// Send spot tokens to another address.
+    ///
+    /// This action transfers spot tokens (like PURR, HYPE, etc.) from your spot balance
+    /// to another address. The transfer happens on the Hyperliquid L1 and requires EIP-712 signature.
+    ///
+    /// # Fields
+    ///
+    /// - `signature_chain_id`: The chain ID for signature verification (use [`super::ARBITRUM_MAINNET_CHAIN_ID`] or [`super::ARBITRUM_TESTNET_CHAIN_ID`])
+    /// - `hyperliquid_chain`: Whether this is mainnet or testnet
+    /// - `destination`: The recipient's address
+    /// - `token`: The spot token to send (wrapped in `SendToken`)
+    /// - `amount`: Amount to send (in token's native units)
+    /// - `time`: Timestamp in milliseconds (should match the nonce)
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use hypersdk::hypercore::types::{SpotSendAction, SendToken};
+    /// use rust_decimal::dec;
+    ///
+    /// let send = SpotSendAction {
+    ///     signature_chain_id: ARBITRUM_MAINNET_CHAIN_ID,
+    ///     hyperliquid_chain: Chain::Mainnet,
+    ///     destination: "0x1234...".parse()?,
+    ///     token: SendToken(purr_token),
+    ///     amount: dec!(1000),
+    ///     time: chrono::Utc::now().timestamp_millis() as u64,
+    /// };
+    /// ```
+    ///
+    /// <https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint#core-spot-transfer>
+    #[derive(Serialize, Deserialize, Debug, Clone)]
+    #[serde(rename_all = "camelCase")]
+    pub struct SpotSendAction {
+        /// Signature chain ID.
+        ///
+        /// For arbitrum use [`super::ARBITRUM_MAINNET_CHAIN_ID`] or [`super::ARBITRUM_TESTNET_CHAIN_ID`].
+        pub signature_chain_id: String,
+        /// The chain this action is being executed on.
+        pub hyperliquid_chain: Chain,
+        /// The destination address.
+        #[serde(
+            serialize_with = "super::utils::serialize_address_as_hex",
+            deserialize_with = "super::utils::deserialize_address_from_hex"
+        )]
+        pub destination: Address,
+        /// Token
+        pub token: String,
+        /// The amount.
+        #[serde(with = "rust_decimal::serde::str")]
+        pub amount: Decimal,
+        /// Current time, should match the nonce
+        pub time: u64,
+    }
+
+    /// Send asset.
+    ///
+    /// <https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint#send-asset>
+    #[derive(Serialize, Deserialize, Debug, Clone)]
+    #[serde(rename_all = "camelCase")]
+    pub struct SendAssetAction {
+        /// Signature chain ID.
+        ///
+        /// For arbitrum use [`super::ARBITRUM_MAINNET_CHAIN_ID`] or [`super::ARBITRUM_TESTNET_CHAIN_ID`].
+        pub signature_chain_id: String,
+        /// The chain this action is being executed on.
+        pub hyperliquid_chain: Chain,
+        /// The destination address.
+        #[serde(
+            serialize_with = "super::utils::serialize_address_as_hex",
+            deserialize_with = "super::utils::deserialize_address_from_hex"
+        )]
+        pub destination: Address,
+        /// Source DEX, can be empty
+        pub source_dex: String,
+        /// Destiation DEX, can be empty
+        pub destination_dex: String,
+        /// Token
+        pub token: String,
+        /// The amount.
+        #[serde(with = "rust_decimal::serde::str")]
+        pub amount: Decimal,
+        /// From subaccount, can be empty
+        pub from_sub_account: String,
+        /// Request nonce
+        pub nonce: u64,
+    }
+
+    /// Multi-signature action payload.
+    ///
+    /// Contains the multisig user address, outer signer, and the inner action to execute.
+    #[derive(Clone, Serialize, Deserialize, Debug)]
+    #[serde(rename_all = "camelCase")]
+    pub struct MultiSigPayload {
+        /// The multisig account address
+        pub multi_sig_user: String,
+        /// The address executing the multisig action
+        pub outer_signer: String,
+        /// The inner action to execute
+        pub action: Box<Action>,
+    }
+
+    /// Multi-signature action wrapper.
+    ///
+    /// Wraps any action with multiple signatures for multisig execution.
+    #[derive(Clone, Serialize, Deserialize, Debug)]
+    #[serde(rename_all = "camelCase")]
+    pub struct MultiSigAction {
+        /// Signature chain ID (0x66eee for L1 multisig)
+        pub signature_chain_id: String,
+        /// Signatures from authorized signers
+        pub signatures: Vec<Signature>,
+        /// The multisig payload
+        pub payload: MultiSigPayload,
     }
 }
 
@@ -2354,6 +2531,8 @@ pub(super) mod solidity {
 
 #[cfg(test)]
 mod tests {
+    use crate::hypercore::raw::ApiResponse;
+
     use super::*;
 
     #[test]

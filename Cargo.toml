@@ -52,7 +52,7 @@ name = "buy_and_transfer"
 path = "examples/hypercore/buy_and_transfer.rs"
 
 [[example]]
-name = "list_markets"
+name = "list-markets"
 path = "examples/hypercore/list-markets.rs"
 
 [[example]]

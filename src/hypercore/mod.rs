@@ -82,7 +82,7 @@
 
 pub mod error;
 pub mod http;
-mod signing;
+pub mod signing;
 pub mod types;
 mod utils;
 pub mod ws;
@@ -103,7 +103,7 @@ use either::Either;
 pub use error::{ActionError, Error};
 use reqwest::IntoUrl;
 use rust_decimal::{Decimal, MathematicalOps, RoundingStrategy, prelude::ToPrimitive};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 /// Re-import types.
 pub use types::*;
 use url::Url;
@@ -1036,7 +1036,7 @@ mod tick_tests {
 /// # Ok(())
 /// # }
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpotToken {
     /// Token name (e.g., "USDC", "BTC", "PURR")
     pub name: String,
