@@ -15,8 +15,8 @@ use serde::Serialize;
 use crate::hypercore::{
     ARBITRUM_TESTNET_CHAIN_ID, Chain,
     raw::{
-        Action, ActionRequest, ApproveAgent, MultiSigAction, MultiSigPayload, SendAssetAction,
-        SpotSendAction, UsdSendAction,
+        Action, ActionRequest, ApproveAgent, ConvertToMultiSigUser, MultiSigAction,
+        MultiSigPayload, SendAssetAction, SpotSendAction, UsdSendAction,
     },
     types::{
         BatchCancel, BatchCancelCloid, BatchModify, BatchOrder, CORE_MAINNET_EIP712_DOMAIN,
@@ -531,6 +531,43 @@ impl Signable for ApproveAgent {
     ) -> Result<ActionRequest> {
         let typed_data = get_typed_data::<solidity::ApproveAgent>(&self, chain, None);
         sign_eip712(signer, Action::ApproveAgent(self), typed_data, nonce).await
+    }
+}
+
+impl Signable for ConvertToMultiSigUser {
+    fn sign_sync<S: SignerSync>(
+        self,
+        signer: &S,
+        nonce: u64,
+        _maybe_vault_address: Option<Address>,
+        _maybe_expires_after: Option<DateTime<Utc>>,
+        chain: Chain,
+    ) -> Result<ActionRequest> {
+        let typed_data = get_typed_data::<solidity::ConvertToMultiSigUser>(&self, chain, None);
+        sign_eip712_sync(
+            signer,
+            Action::ConvertToMultiSigUser(self),
+            typed_data,
+            nonce,
+        )
+    }
+
+    async fn sign<S: Signer + Send + Sync>(
+        self,
+        signer: &S,
+        nonce: u64,
+        _maybe_vault_address: Option<Address>,
+        _maybe_expires_after: Option<DateTime<Utc>>,
+        chain: Chain,
+    ) -> Result<ActionRequest> {
+        let typed_data = get_typed_data::<solidity::ConvertToMultiSigUser>(&self, chain, None);
+        sign_eip712(
+            signer,
+            Action::ConvertToMultiSigUser(self),
+            typed_data,
+            nonce,
+        )
+        .await
     }
 }
 

@@ -2008,6 +2008,8 @@ pub mod raw {
             using_big_blocks: bool,
         },
         ApproveAgent(ApproveAgent),
+        /// Convert to multi-signature user.
+        ConvertToMultiSigUser(ConvertToMultiSigUser),
         /// Multi-sig action.
         MultiSig(MultiSigAction),
         /// Invalidate a request.
@@ -2053,6 +2055,11 @@ pub mod raw {
                 Action::SendAsset(inner) => Some(utils::get_typed_data::<
                     solidity::multisig::SendAsset,
                 >(inner, chain, multi_sig)),
+                Action::ConvertToMultiSigUser(inner) => {
+                    Some(utils::get_typed_data::<
+                        solidity::multisig::ConvertToMultiSigUser,
+                    >(inner, chain, multi_sig))
+                }
                 // All other actions use RMP signing
                 _ => None,
             }
@@ -2150,6 +2157,13 @@ pub mod raw {
                     chain,
                 ),
                 Action::ApproveAgent(agent) => agent.sign_sync(
+                    signer,
+                    nonce,
+                    maybe_vault_address,
+                    maybe_expires_after,
+                    chain,
+                ),
+                Action::ConvertToMultiSigUser(convert) => convert.sign_sync(
                     signer,
                     nonce,
                     maybe_vault_address,
@@ -2276,6 +2290,17 @@ pub mod raw {
                         .await
                 }
                 Action::ApproveAgent(inner) => {
+                    inner
+                        .sign(
+                            signer,
+                            nonce,
+                            maybe_vault_address,
+                            maybe_expires_after,
+                            chain,
+                        )
+                        .await
+                }
+                Action::ConvertToMultiSigUser(inner) => {
                     inner
                         .sign(
                             signer,
@@ -2479,6 +2504,37 @@ pub mod raw {
         pub nonce: u64,
     }
 
+    /// Multisig configuration for converting an account to multisig.
+    #[derive(Serialize, Deserialize, Debug, Clone, Default)]
+    #[serde(rename_all = "camelCase")]
+    pub struct SignersConfig {
+        /// Addresses authorized to sign for this multisig account
+        pub authorized_users: Vec<Address>,
+        /// Minimum number of signatures required (e.g., 2 for 2-of-3)
+        pub threshold: usize,
+    }
+
+    /// Convert account to multi-signature user.
+    ///
+    /// Converts a regular account to a multisig account by specifying authorized signers
+    /// and the required signature threshold.
+    #[derive(Serialize, Deserialize, Debug, Clone)]
+    #[serde(rename_all = "camelCase")]
+    pub struct ConvertToMultiSigUser {
+        /// Signature chain ID.
+        ///
+        /// For arbitrum use [`crate::hypercore::ARBITRUM_MAINNET_CHAIN_ID`] or [`crate::hypercore::ARBITRUM_TESTNET_CHAIN_ID`].
+        pub signature_chain_id: String,
+        /// The chain this action is being executed on.
+        pub hyperliquid_chain: Chain,
+        /// Signers configuration (authorized users and threshold) as JSON string
+        #[serde(serialize_with = "super::utils::serialize_signers_as_json")]
+        #[serde(deserialize_with = "super::utils::deserialize_signers_as_json")]
+        pub signers: SignersConfig,
+        /// Request nonce
+        pub nonce: u64,
+    }
+
     /// Multi-signature action payload.
     ///
     /// Contains the multisig user address, outer signer, and the inner action to execute.
@@ -2554,6 +2610,12 @@ pub(super) mod solidity {
             uint64 nonce;
         }
 
+        struct ConvertToMultiSigUser {
+            string hyperliquidChain;
+            string signers;
+            uint64 nonce;
+        }
+
         struct SendMultiSig {
             string hyperliquidChain;
             bytes32 multiSigActionHash;
@@ -2598,6 +2660,14 @@ pub(super) mod solidity {
                 string token;
                 string amount;
                 string fromSubAccount;
+                uint64 nonce;
+            }
+
+            struct ConvertToMultiSigUser {
+                string hyperliquidChain;
+                address payloadMultiSigUser;
+                address outerSigner;
+                string signers;
                 uint64 nonce;
             }
         }

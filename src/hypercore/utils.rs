@@ -61,6 +61,39 @@ where
     serializer.serialize_str(&format!("{:#x}", value))
 }
 
+/// Serializes SignersConfig as a JSON string, or "null" if authorized_users is empty.
+///
+/// When converting a multisig user back to a normal user, the signers field should be "null".
+pub(super) fn serialize_signers_as_json<S>(
+    value: &super::types::raw::SignersConfig,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    if value.authorized_users.is_empty() {
+        serializer.serialize_str("null")
+    } else {
+        let json = serde_json::to_string(value).map_err(serde::ser::Error::custom)?;
+        serializer.serialize_str(&json)
+    }
+}
+
+pub(super) fn deserialize_signers_as_json<'de, D>(
+    deserializer: D,
+) -> Result<super::types::raw::SignersConfig, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    if s == "null" {
+        Ok(Default::default())
+    } else {
+        let data = serde_json::from_str(&s).map_err(serde::de::Error::custom)?;
+        Ok(data)
+    }
+}
+
 /// Deserializes a U256 value from a hex string.
 pub(super) fn deserialize_from_hex<'de, D>(deserializer: D) -> Result<U256, D::Error>
 where

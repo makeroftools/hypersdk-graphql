@@ -78,7 +78,7 @@ struct Cli {
     name: String,
 
     /// Chain to execute on (mainnet or testnet)
-    #[arg(long)]
+    #[arg(long, default_value_t = Chain::Testnet)]
     chain: Chain,
 }
 

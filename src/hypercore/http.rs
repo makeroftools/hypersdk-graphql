@@ -58,7 +58,10 @@ use super::signing::*;
 use crate::hypercore::{
     ActionError, ApiAgent, CandleInterval, Chain, Cloid, Dex, MultiSigConfig, OidOrCloid,
     PerpMarket, Signature, SpotMarket, SpotToken, mainnet_url,
-    raw::{Action, ActionRequest, ApiResponse, ApproveAgent, OkResponse},
+    raw::{
+        Action, ActionRequest, ApiResponse, ApproveAgent, ConvertToMultiSigUser, OkResponse,
+        SignersConfig,
+    },
     testnet_url,
     types::{
         BasicOrder, BatchCancel, BatchCancelCloid, BatchModify, BatchOrder, Fill, InfoRequest,
@@ -887,6 +890,72 @@ impl Client {
                 anyhow::bail!("approve_agent: {err}")
             }
             _ => anyhow::bail!("approve_agent: unexpected response type: {resp:?}"),
+        }
+    }
+
+    /// Convert account to multi-signature user.
+    ///
+    /// Converts a regular account to a multisig account by specifying authorized signers
+    /// and the required signature threshold. After conversion, the account will require
+    /// multiple signatures to execute transactions.
+    ///
+    /// # Parameters
+    ///
+    /// - `signer`: The wallet signing the conversion (must be the account owner)
+    /// - `authorized_users`: List of addresses authorized to sign for the multisig
+    /// - `threshold`: Minimum number of signatures required (e.g., 2 for 2-of-3)
+    /// - `nonce`: The nonce for this action
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use hypersdk::hypercore::HttpClient;
+    /// # use alloy::primitives::address;
+    /// # use alloy_signer_local::PrivateKeySigner;
+    /// # async fn example() -> anyhow::Result<()> {
+    /// # let client = HttpClient::mainnet();
+    /// # let signer = PrivateKeySigner::random();
+    /// let authorized_users = vec![
+    ///     address!("0x1111111111111111111111111111111111111111"),
+    ///     address!("0x2222222222222222222222222222222222222222"),
+    ///     address!("0x3333333333333333333333333333333333333333"),
+    /// ];
+    /// let threshold = 2; // 2-of-3 multisig
+    /// let nonce = 123456789;
+    ///
+    /// client.convert_to_multisig(&signer, authorized_users, threshold, nonce).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn convert_to_multisig<S: SignerSync>(
+        &self,
+        signer: &S,
+        authorized_users: Vec<Address>,
+        threshold: usize,
+        nonce: u64,
+    ) -> Result<()> {
+        let chain = self.chain;
+        let signature_chain_id = chain.arbitrum_id().to_owned();
+
+        let convert = ConvertToMultiSigUser {
+            signature_chain_id,
+            hyperliquid_chain: chain,
+            signers: SignersConfig {
+                authorized_users,
+                threshold,
+            },
+            nonce,
+        };
+
+        let resp = self
+            .sign_and_send_sync(signer, convert, nonce, None, None)
+            .await?;
+        match resp {
+            ApiResponse::Ok(OkResponse::Default) => Ok(()),
+            ApiResponse::Err(err) => {
+                anyhow::bail!("convert_to_multisig: {err}")
+            }
+            _ => anyhow::bail!("convert_to_multisig: unexpected response type: {resp:?}"),
         }
     }
 
@@ -1743,6 +1812,59 @@ where
             ApiResponse::Ok(OkResponse::Default) => Ok(()),
             ApiResponse::Err(err) => anyhow::bail!("approve_agent: {err}"),
             _ => anyhow::bail!("approve_agent: unexpected response type: {resp:?}"),
+        }
+    }
+
+    /// Convert multisig account back to normal user.
+    ///
+    /// Converts the multisig account back to a regular single-signer account by setting
+    /// the signers to null. After conversion, the account will only require a single
+    /// signature to execute transactions.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// client
+    ///     .multi_sig(&lead, multisig_addr, nonce)
+    ///     .signer(&signer1)
+    ///     .signer(&signer2)
+    ///     .convert_to_normal_user()
+    ///     .await?;
+    /// ```
+    pub async fn convert_to_normal_user(&self) -> Result<()> {
+        let chain = self.client.chain;
+        let signature_chain_id = chain.arbitrum_id().to_owned();
+
+        let convert = ConvertToMultiSigUser {
+            signature_chain_id,
+            hyperliquid_chain: chain,
+            signers: SignersConfig {
+                authorized_users: vec![], // Empty vec serializes to "null"
+                threshold: 0,
+            },
+            nonce: self.nonce,
+        };
+
+        let action = multisig_collect_signatures(
+            self.lead.address(),
+            self.multi_sig_user,
+            self.signers.iter().copied(),
+            self.signatures.iter().copied(),
+            Action::ConvertToMultiSigUser(convert),
+            self.nonce,
+            self.client.chain,
+        )
+        .await?;
+
+        let resp = self
+            .client
+            .sign_and_send(self.lead, action, self.nonce, None, None)
+            .await?;
+
+        match resp {
+            ApiResponse::Ok(OkResponse::Default) => Ok(()),
+            ApiResponse::Err(err) => anyhow::bail!("convert_to_normal_user: {err}"),
+            _ => anyhow::bail!("convert_to_normal_user: unexpected response type: {resp:?}"),
         }
     }
 }
