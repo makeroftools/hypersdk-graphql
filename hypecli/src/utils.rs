@@ -211,7 +211,6 @@ pub async fn sign<S: Signer + Send + Sync>(
         .action
         .typed_data_multisig(multi_sig_user, lead, chain)
     {
-        // typed_data.domain = hypercore::types::MULTISIG_MAINNET_EIP712_DOMAIN;
         let sig = signer.sign_dynamic_typed_data(&typed_data).await?;
         Ok(sig.into())
     } else {

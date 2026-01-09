@@ -778,10 +778,7 @@ pub fn multisig_lead_msg_sync<S: SignerSync>(
         nonce,
     };
 
-    let mut typed_data = get_typed_data::<solidity::SendMultiSig>(&envelope, chain, None);
-    // for some reason the multisig domain is testnet
-    // typed_data.domain = ARBITRUM_TESTNET_EIP712_DOMAIN;
-
+    let typed_data = get_typed_data::<solidity::SendMultiSig>(&envelope, chain, None);
     let sig = signer.sign_dynamic_typed_data_sync(&typed_data)?.into();
 
     Ok(ActionRequest {
@@ -948,7 +945,7 @@ pub(super) async fn multisig_collect_signatures<'a, S: Signer + Send + Sync + 'a
     signatures.extend(signed);
 
     Ok(MultiSigAction {
-        signature_chain_id: ARBITRUM_TESTNET_CHAIN_ID.to_owned(),
+        signature_chain_id: chain.arbitrum_id().to_owned(),
         signatures,
         payload: MultiSigPayload {
             multi_sig_user: multi_sig_user_str,
@@ -972,10 +969,6 @@ async fn multisig_collect_eip712_signatures<'a, S: Signer + Send + Sync + 'a>(
     signers: impl Iterator<Item = &'a S>,
     typed_data: TypedData,
 ) -> Result<Vec<Signature>> {
-    // Prepare typed data once with the multisig domain
-    let mut typed_data = typed_data;
-    // typed_data.domain = super::types::ARBITRUM_TESTNET_EIP712_DOMAIN;
-
     let mut signatures = vec![];
     for signer in signers {
         let signature = signer.sign_dynamic_typed_data(&typed_data).await?;

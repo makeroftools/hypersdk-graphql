@@ -223,7 +223,7 @@ async fn execute_multisig_action(
     pb.finish_and_clear();
 
     let multi_sig_action = MultiSigAction {
-        signature_chain_id: "0x66eee".to_string(),
+        signature_chain_id: hl.chain().arbitrum_id().to_owned(),
         signatures,
         payload: action,
     };
