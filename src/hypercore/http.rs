@@ -56,8 +56,8 @@ use url::Url;
 
 use super::signing::*;
 use crate::hypercore::{
-    ActionError, ApiAgent, CandleInterval, Chain, Cloid, Dex, MultiSigConfig, OidOrCloid,
-    PerpMarket, Signature, SpotMarket, SpotToken, mainnet_url,
+    ARBITRUM_TESTNET_CHAIN_ID, ActionError, ApiAgent, CandleInterval, Chain, Cloid, Dex,
+    MultiSigConfig, OidOrCloid, PerpMarket, Signature, SpotMarket, SpotToken, mainnet_url,
     raw::{
         Action, ActionRequest, ApiResponse, ApproveAgent, ConvertToMultiSigUser, OkResponse,
         SignersConfig,
@@ -927,7 +927,7 @@ impl Client {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn convert_to_multisig<S: SignerSync>(
+    pub async fn convert_to_multisig<S: Signer + Send + Sync>(
         &self,
         signer: &S,
         authorized_users: Vec<Address>,
@@ -948,7 +948,7 @@ impl Client {
         };
 
         let resp = self
-            .sign_and_send_sync(signer, convert, nonce, None, None)
+            .sign_and_send(signer, convert, nonce, None, None)
             .await?;
         match resp {
             ApiResponse::Ok(OkResponse::Default) => Ok(()),
@@ -1833,10 +1833,9 @@ where
     /// ```
     pub async fn convert_to_normal_user(&self) -> Result<()> {
         let chain = self.client.chain;
-        let signature_chain_id = chain.arbitrum_id().to_owned();
 
         let convert = ConvertToMultiSigUser {
-            signature_chain_id,
+            signature_chain_id: chain.arbitrum_id().to_owned(),
             hyperliquid_chain: chain,
             signers: SignersConfig {
                 authorized_users: vec![], // Empty vec serializes to "null"

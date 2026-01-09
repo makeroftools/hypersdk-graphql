@@ -13,9 +13,8 @@ use alloy::{
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::hypercore::Chain;
-
 use super::Cloid;
+use crate::hypercore::Chain;
 
 const HYPERLIQUID_EIP_PREFIX: &str = "HyperliquidTransaction:";
 

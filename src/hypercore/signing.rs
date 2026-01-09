@@ -13,7 +13,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 use crate::hypercore::{
-    ARBITRUM_TESTNET_CHAIN_ID, Chain,
+    ARBITRUM_TESTNET_CHAIN_ID, ARBITRUM_TESTNET_EIP712_DOMAIN, Chain,
     raw::{
         Action, ActionRequest, ApproveAgent, ConvertToMultiSigUser, MultiSigAction,
         MultiSigPayload, SendAssetAction, SpotSendAction, UsdSendAction,
@@ -778,7 +778,9 @@ pub fn multisig_lead_msg_sync<S: SignerSync>(
         nonce,
     };
 
-    let typed_data = get_typed_data::<solidity::SendMultiSig>(&envelope, chain, None);
+    let mut typed_data = get_typed_data::<solidity::SendMultiSig>(&envelope, chain, None);
+    // for some reason the multisig domain is testnet
+    // typed_data.domain = ARBITRUM_TESTNET_EIP712_DOMAIN;
 
     let sig = signer.sign_dynamic_typed_data_sync(&typed_data)?.into();
 
@@ -972,7 +974,7 @@ async fn multisig_collect_eip712_signatures<'a, S: Signer + Send + Sync + 'a>(
 ) -> Result<Vec<Signature>> {
     // Prepare typed data once with the multisig domain
     let mut typed_data = typed_data;
-    typed_data.domain = super::types::ARBITRUM_TESTNET_EIP712_DOMAIN;
+    // typed_data.domain = super::types::ARBITRUM_TESTNET_EIP712_DOMAIN;
 
     let mut signatures = vec![];
     for signer in signers {

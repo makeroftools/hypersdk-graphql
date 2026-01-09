@@ -2676,9 +2676,8 @@ pub(super) mod solidity {
 
 #[cfg(test)]
 mod tests {
-    use crate::hypercore::raw::ApiResponse;
-
     use super::*;
+    use crate::hypercore::raw::ApiResponse;
 
     #[test]
     fn test_api_error_response() {
