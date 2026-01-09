@@ -13,7 +13,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 use crate::hypercore::{
-    ARBITRUM_TESTNET_CHAIN_ID, ARBITRUM_TESTNET_EIP712_DOMAIN, Chain,
+    Chain,
     raw::{
         Action, ActionRequest, ApproveAgent, ConvertToMultiSigUser, MultiSigAction,
         MultiSigPayload, SendAssetAction, SpotSendAction, UsdSendAction,

@@ -56,8 +56,8 @@ use url::Url;
 
 use super::signing::*;
 use crate::hypercore::{
-    ARBITRUM_TESTNET_CHAIN_ID, ActionError, ApiAgent, CandleInterval, Chain, Cloid, Dex,
-    MultiSigConfig, OidOrCloid, PerpMarket, Signature, SpotMarket, SpotToken, mainnet_url,
+    ActionError, ApiAgent, CandleInterval, Chain, Cloid, Dex, MultiSigConfig, OidOrCloid,
+    PerpMarket, Signature, SpotMarket, SpotToken, mainnet_url,
     raw::{
         Action, ActionRequest, ApiResponse, ApproveAgent, ConvertToMultiSigUser, OkResponse,
         SignersConfig,
@@ -621,18 +621,19 @@ impl Client {
     /// # Example
     ///
     /// ```no_run
-    /// # use hypersdk::hypercore::HttpClient;
-    /// # use alloy::primitives::address;
-    /// # async fn example() -> anyhow::Result<()> {
-    /// # let client = HttpClient::mainnet();
-    /// let user = address!("0000000000000000000000000000000000000000");
-    /// let agents = client.api_agents(user).await?;
+    /// use hypersdk::hypercore;
+    /// use alloy::primitives::address;
+    /// async fn example() -> anyhow::Result<()> {
+    ///     let client = hypercore::mainnet();
+    ///     let user = address!("0000000000000000000000000000000000000000");
+    ///     let agents = client.api_agents(user).await?;
     ///
-    /// for agent in agents {
-    ///     println!("Agent {}: {:?}, valid until: {}", agent.name, agent.address, agent.valid_until);
+    ///     for agent in agents {
+    ///         println!("Agent {}: {:?}, valid until: {:?}", agent.name, agent.address, agent.valid_until);
+    ///     }
+    ///
+    ///     Ok(())
     /// }
-    /// # Ok(())
-    /// # }
     /// ```
     pub async fn api_agents(&self, user: Address) -> Result<Vec<ApiAgent>> {
         let mut api_url = self.base_url.clone();
@@ -850,19 +851,20 @@ impl Client {
     /// # Example
     ///
     /// ```no_run
-    /// # use hypersdk::hypercore::HttpClient;
-    /// # use alloy::primitives::address;
-    /// # use alloy_signer_local::PrivateKeySigner;
-    /// # async fn example() -> anyhow::Result<()> {
-    /// # let client = HttpClient::mainnet();
-    /// # let signer = PrivateKeySigner::random();
-    /// let agent = address!("0x97271b6b7f3b23a2f4700ae671b05515ae5c3319");
-    /// let name = "my_agent".to_string();
-    /// let nonce = 123456789;
+    /// use hypersdk::hypercore;
+    /// use alloy::primitives::address;
+    /// use alloy::signers::local::PrivateKeySigner;
     ///
-    /// client.approve_agent(&signer, agent, name, nonce).await?;
-    /// # Ok(())
-    /// # }
+    /// async fn example() -> anyhow::Result<()> {
+    ///     let client = hypercore::mainnet();
+    ///     let signer = PrivateKeySigner::random();
+    ///     let agent = address!("0x97271b6b7f3b23a2f4700ae671b05515ae5c3319");
+    ///     let name = "my_agent".to_string();
+    ///     let nonce = 123456789;
+    ///
+    ///     client.approve_agent(&signer, agent, name, nonce).await?;
+    ///     Ok(())
+    /// }
     /// ```
     pub async fn approve_agent<S: Signer + Send + Sync>(
         &self,
@@ -909,23 +911,25 @@ impl Client {
     /// # Example
     ///
     /// ```no_run
-    /// # use hypersdk::hypercore::HttpClient;
-    /// # use alloy::primitives::address;
-    /// # use alloy_signer_local::PrivateKeySigner;
-    /// # async fn example() -> anyhow::Result<()> {
-    /// # let client = HttpClient::mainnet();
-    /// # let signer = PrivateKeySigner::random();
-    /// let authorized_users = vec![
-    ///     address!("0x1111111111111111111111111111111111111111"),
-    ///     address!("0x2222222222222222222222222222222222222222"),
-    ///     address!("0x3333333333333333333333333333333333333333"),
-    /// ];
-    /// let threshold = 2; // 2-of-3 multisig
-    /// let nonce = 123456789;
+    /// use hypersdk::hypercore;
+    /// use alloy::primitives::address;
+    /// use alloy::signers::local::PrivateKeySigner;
     ///
-    /// client.convert_to_multisig(&signer, authorized_users, threshold, nonce).await?;
-    /// # Ok(())
-    /// # }
+    /// async fn example() -> anyhow::Result<()> {
+    ///     let client = hypercore::mainnet();
+    ///     let signer = PrivateKeySigner::random();
+    ///     let authorized_users = vec![
+    ///         address!("0x1111111111111111111111111111111111111111"),
+    ///         address!("0x2222222222222222222222222222222222222222"),
+    ///         address!("0x3333333333333333333333333333333333333333"),
+    ///     ];
+    ///     let threshold = 2; // 2-of-3 multisig
+    ///     let nonce = 123456789;
+    ///
+    ///     client.convert_to_multisig(&signer, authorized_users, threshold, nonce).await?;
+    ///
+    ///     Ok(())
+    /// }
     /// ```
     pub async fn convert_to_multisig<S: Signer + Send + Sync>(
         &self,
