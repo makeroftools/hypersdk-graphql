@@ -1248,7 +1248,7 @@ impl Client {
     }
 
     /// Send a signed action hashing.
-    fn sign_and_send_sync<S: SignerSync, A: Signable>(
+    fn sign_and_send_sync<S: SignerSync, A: Into<Action>>(
         &self,
         signer: &S,
         action: A,
@@ -1256,6 +1256,7 @@ impl Client {
         maybe_vault_address: Option<Address>,
         maybe_expires_after: Option<DateTime<Utc>>,
     ) -> impl Future<Output = Result<ApiResponse>> + Send + 'static {
+        let action: Action = action.into();
         let res = action.sign_sync(
             signer,
             nonce,
@@ -1285,7 +1286,7 @@ impl Client {
     }
 
     /// Send a signed action hashing.
-    async fn sign_and_send<S: Signer + Send + Sync, A: Signable>(
+    async fn sign_and_send<S: Signer + Send + Sync, A: Into<Action>>(
         &self,
         signer: &S,
         action: A,
@@ -1293,6 +1294,7 @@ impl Client {
         maybe_vault_address: Option<Address>,
         maybe_expires_after: Option<DateTime<Utc>>,
     ) -> Result<ApiResponse> {
+        let action: Action = action.into();
         let req = action
             .sign(
                 signer,

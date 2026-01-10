@@ -82,6 +82,7 @@
 
 pub mod error;
 pub mod http;
+#[doc(hidden)]
 pub mod signing;
 pub mod types;
 mod utils;
