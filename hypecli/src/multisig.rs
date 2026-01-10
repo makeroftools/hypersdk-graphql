@@ -8,7 +8,7 @@ use clap::{Args, Subcommand};
 use futures::StreamExt;
 use hypersdk::hypercore::{
     self, HttpClient, NonceHandler, SendAsset, SendToken, Signature,
-    raw::{Action, ConvertToMultiSigUser, MultiSigAction, MultiSigPayload},
+    raw::{self, Action, ConvertToMultiSigUser, MultiSigAction, MultiSigPayload},
 };
 use hypersdk::{Address, Decimal};
 use indicatif::{ProgressBar, ProgressStyle};
@@ -409,8 +409,15 @@ async fn execute_multisig_action(
         hl.chain(),
     )
     .await?;
-    let res = hl.send(req).await?;
-    println!("{res:?}");
+
+    match hl.send(req).await? {
+        raw::ApiResponse::Ok(_) => {
+            println!("Success");
+        }
+        raw::ApiResponse::Err(err) => {
+            println!("error: {err}");
+        }
+    }
 
     router.shutdown().await?;
 

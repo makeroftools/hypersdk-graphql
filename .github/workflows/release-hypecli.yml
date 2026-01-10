@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - "hypecli-v*"
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       tag:
@@ -31,12 +33,18 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             TAG="${{ github.event.inputs.tag }}"
-          else
+            VERSION=${TAG#hypecli-v}
+          elif [ "${{ github.ref_type }}" = "tag" ]; then
             TAG="${{ github.ref_name }}"
+            VERSION=${TAG#hypecli-v}
+          else
+            # Push to main branch
+            TAG="hypecli-main-latest"
+            VERSION="main-${{ github.sha }}"
           fi
-          VERSION=${TAG#hypecli-v}
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "is_main_build=${{ github.ref_type != 'tag' && github.event_name != 'workflow_dispatch' }}" >> $GITHUB_OUTPUT
 
       - name: Create Release
         id: create_release
@@ -47,7 +55,8 @@ jobs:
           tag_name: ${{ steps.extract_version.outputs.tag }}
           name: hypecli ${{ steps.extract_version.outputs.version }}
           draft: false
-          prerelease: false
+          prerelease: ${{ steps.extract_version.outputs.is_main_build == 'true' }}
+          make_latest: ${{ steps.extract_version.outputs.is_main_build != 'true' }}
 
   build:
     needs: create-release
