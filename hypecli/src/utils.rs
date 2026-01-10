@@ -9,53 +9,16 @@
 use std::{env::home_dir, str::FromStr};
 
 use alloy::signers::{self, Signer, ledger::LedgerSigner};
-use hypersdk::{
-    Address,
-    hypercore::{
-        Chain, PrivateKeySigner, Signature, raw::MultiSigPayload, signing::sign_l1_action,
-    },
-};
+use hypersdk::{Address, hypercore::PrivateKeySigner};
 use iroh::{
     Endpoint, SecretKey,
     discovery::{dns::DnsDiscovery, mdns::MdnsDiscovery},
-    protocol::Router,
 };
-use iroh_gossip::{Gossip, TopicId};
 use iroh_tickets::endpoint::EndpointTicket;
 
 use crate::SignerArgs;
 
-/// Creates a deterministic gossip topic ID from a multi-sig address.
-///
-/// This ensures all participants in a multi-sig transaction use the same
-/// gossip topic for coordination.
-///
-/// # Arguments
-///
-/// * `multi_sig_addr` - The multi-sig wallet address
-///
-/// # Returns
-///
-/// A 32-byte TopicId derived from the address (first 20 bytes are the address,
-/// remaining bytes are zero-padded).
-pub fn make_topic(multi_sig_addr: Address) -> TopicId {
-    let mut topic_bytes = [0u8; 32];
-    topic_bytes[0..20].copy_from_slice(&multi_sig_addr[..]);
-    TopicId::from_bytes(topic_bytes)
-}
-
 /// Generates a random secret key for the gossip node.
-///
-/// Each gossip session uses a fresh ephemeral key rather than deriving
-/// from the signer's key for better privacy.
-///
-/// # Arguments
-///
-/// * `_signer` - The signer (unused, kept for potential future use)
-///
-/// # Returns
-///
-/// A randomly generated SecretKey for the Iroh endpoint.
 pub fn make_key(_signer: &impl Signer) -> SecretKey {
     // let public_address = signer.address();
     // let mut address_bytes = [0u8; 32];
@@ -88,7 +51,7 @@ pub fn make_key(_signer: &impl Signer) -> SecretKey {
 pub async fn start_gossip(
     key: iroh::SecretKey,
     wait_online: bool,
-) -> anyhow::Result<(EndpointTicket, Gossip, Router)> {
+) -> anyhow::Result<(Endpoint, EndpointTicket)> {
     let endpoint = Endpoint::builder()
         .secret_key(key)
         .relay_mode(iroh::RelayMode::Default)
@@ -103,13 +66,7 @@ pub async fn start_gossip(
         let _ = endpoint.online().await;
     }
 
-    let gossip = Gossip::builder().spawn(endpoint.clone());
-
-    let router = Router::builder(endpoint)
-        .accept(iroh_gossip::ALPN, gossip.clone())
-        .spawn();
-
-    Ok((ticket, gossip, router))
+    Ok((endpoint, ticket))
 }
 
 /// Finds and loads a signer from various sources.
@@ -174,47 +131,5 @@ pub async fn find_signer(
             }
         }
         Err(anyhow::anyhow!("unable to find matching key in ledger"))
-    }
-}
-
-/// Signs a multi-sig action using the provided signer.
-///
-/// Handles both EIP-712 typed data signatures and L1 action signatures
-/// depending on the action type. For multi-sig actions that support
-/// typed data, uses EIP-712 signing. Otherwise, falls back to L1
-/// action signing.
-///
-/// # Arguments
-///
-/// * `signer` - The signer to use for signing
-/// * `nonce` - Transaction nonce
-/// * `chain` - Target chain for the action
-/// * `action` - Multi-sig payload to sign
-///
-/// # Returns
-///
-/// A cryptographic signature over the action.
-///
-/// # Errors
-///
-/// Returns an error if signing fails or if the action hash cannot be computed.
-pub async fn sign<S: Signer + Send + Sync>(
-    signer: &S,
-    nonce: u64,
-    chain: Chain,
-    action: MultiSigPayload,
-) -> anyhow::Result<Signature> {
-    let multi_sig_user = action.multi_sig_user.parse().unwrap();
-    let lead = action.outer_signer.parse().unwrap();
-
-    if let Some(typed_data) = action
-        .action
-        .typed_data_multisig(multi_sig_user, lead, chain)
-    {
-        let sig = signer.sign_dynamic_typed_data(&typed_data).await?;
-        Ok(sig.into())
-    } else {
-        let connection_id = action.action.hash(nonce, None, None)?;
-        sign_l1_action(signer, chain, connection_id).await
     }
 }

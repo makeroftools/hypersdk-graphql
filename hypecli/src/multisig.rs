@@ -1,27 +1,34 @@
 use std::{
-    io::{Read, Write, stdin, stdout},
+    io::{Write, stdout},
     time::Duration,
 };
 
 use alloy::signers::Signer;
 use clap::{Args, Subcommand};
-use futures::StreamExt;
+use futures::{SinkExt, StreamExt};
 use hypersdk::{
     Address, Decimal,
     hypercore::{
         self, HttpClient, NonceHandler, SendAsset, SendToken, Signature,
-        raw::{self, Action, ConvertToMultiSigUser, MultiSigAction, MultiSigPayload},
+        raw::{
+            self, Action, ConvertToMultiSigUser, MultiSigAction, MultiSigPayload, SignersConfig,
+        },
     },
 };
 use indicatif::{ProgressBar, ProgressStyle};
-use iroh_gossip::api::Event;
+use iroh::{endpoint::Connection, protocol::Router};
 use iroh_tickets::endpoint::EndpointTicket;
 use serde::{Deserialize, Serialize};
-use tokio::signal::ctrl_c;
+use tokio::{
+    io::{AsyncReadExt, stdin},
+    signal::ctrl_c,
+    sync::mpsc::unbounded_channel,
+};
+use tokio_util::codec::{FramedRead, FramedWrite};
 
 use crate::{
     SignerArgs,
-    utils::{self, find_signer, make_topic},
+    utils::{self, find_signer},
 };
 
 /// Multi-sig commands regardless of your location.
@@ -31,6 +38,7 @@ use crate::{
 #[derive(Subcommand)]
 pub enum MultiSigCmd {
     Sign(MultiSigSign),
+    Update(UpdateMultiSigCmd),
     SendAsset(MultiSigSendAsset),
     ConvertToNormalUser(MultiSigConvertToNormalUser),
 }
@@ -41,6 +49,7 @@ impl MultiSigCmd {
             MultiSigCmd::Sign(cmd) => cmd.run().await,
             MultiSigCmd::SendAsset(cmd) => cmd.run().await,
             MultiSigCmd::ConvertToNormalUser(cmd) => cmd.run().await,
+            MultiSigCmd::Update(cmd) => cmd.run().await,
         }
     }
 }
@@ -105,13 +114,50 @@ impl MultiSigSign {
     }
 }
 
-/// Messages exchanged over the gossip network during multi-sig coordination.
-#[derive(Serialize, Deserialize)]
-enum Message {
-    /// A proposed action with its nonce that needs to be signed.
-    Action(u64, MultiSigPayload),
-    /// A signature from an authorized signer.
-    Signature(Signature),
+/// Command to convert a multi-signature user back to a normal user.
+///
+/// This command uses peer-to-peer gossip to collect signatures from authorized
+/// signers to convert a multisig account back to a regular single-signer account.
+#[derive(Args, derive_more::Deref)]
+pub struct MultiSigConvertToNormalUser {
+    #[deref]
+    #[command(flatten)]
+    pub common: SignerArgs,
+    /// Multi-sig wallet address.
+    #[arg(long)]
+    pub multi_sig_addr: Address,
+}
+
+impl MultiSigConvertToNormalUser {
+    pub async fn run(self) -> anyhow::Result<()> {
+        convert_to_normal_user(self).await
+    }
+}
+
+/// Update the multi-sig user.
+#[derive(Args, derive_more::Deref)]
+pub struct UpdateMultiSigCmd {
+    #[deref]
+    #[command(flatten)]
+    common: SignerArgs,
+
+    /// Authorized signer addresses (comma-separated)
+    #[arg(long, required = true)]
+    authorized_user: Vec<Address>,
+
+    /// Signature threshold (number of signatures required)
+    #[arg(long)]
+    threshold: usize,
+
+    /// Multi-sig wallet address.
+    #[arg(long)]
+    multi_sig_addr: Address,
+}
+
+impl UpdateMultiSigCmd {
+    pub async fn run(self) -> anyhow::Result<()> {
+        update(self).await
+    }
 }
 
 /// Animation strings for the connecting spinner.
@@ -167,24 +213,35 @@ async fn send_asset(cmd: MultiSigSendAsset) -> anyhow::Result<()> {
     .await
 }
 
-/// Command to convert a multi-signature user back to a normal user.
-///
-/// This command uses peer-to-peer gossip to collect signatures from authorized
-/// signers to convert a multisig account back to a regular single-signer account.
-#[derive(Args, derive_more::Deref)]
-pub struct MultiSigConvertToNormalUser {
-    #[deref]
-    #[command(flatten)]
-    pub common: SignerArgs,
-    /// Multi-sig wallet address.
-    #[arg(long)]
-    pub multi_sig_addr: Address,
-}
+async fn update(cmd: UpdateMultiSigCmd) -> anyhow::Result<()> {
+    let hl = HttpClient::new(cmd.chain);
+    let multisig_config = hl.multi_sig_config(cmd.multi_sig_addr).await?;
+    let signer = find_signer(&cmd.common, Some(&multisig_config.authorized_users)).await?;
 
-impl MultiSigConvertToNormalUser {
-    pub async fn run(self) -> anyhow::Result<()> {
-        convert_to_normal_user(self).await
-    }
+    println!("Using signer {}", signer.address());
+
+    let nonce = NonceHandler::default().next();
+
+    let signature_chain_id = hl.chain().arbitrum_id().to_owned();
+    let action = Action::from(ConvertToMultiSigUser {
+        signature_chain_id,
+        hyperliquid_chain: hl.chain(),
+        signers: SignersConfig {
+            authorized_users: cmd.authorized_user,
+            threshold: cmd.threshold,
+        },
+        nonce,
+    });
+
+    execute_multisig_action(
+        cmd.multi_sig_addr,
+        hl,
+        signer,
+        action,
+        nonce,
+        &multisig_config,
+    )
+    .await
 }
 
 async fn convert_to_normal_user(cmd: MultiSigConvertToNormalUser) -> anyhow::Result<()> {
@@ -230,8 +287,6 @@ async fn sign(cmd: MultiSigSign) -> anyhow::Result<()> {
 
     println!("Signer found using {}", signer.address());
 
-    let addr = cmd.connect.endpoint_addr();
-
     let pb = ProgressBar::new_spinner();
     pb.enable_steady_tick(Duration::from_millis(100));
     pb.set_style(
@@ -240,59 +295,42 @@ async fn sign(cmd: MultiSigSign) -> anyhow::Result<()> {
             .tick_strings(CONNECTING_STRINGS),
     );
 
-    let (_ticket, gossip, router) = utils::start_gossip(key, false).await?;
+    let (endpoint, _ticket) = utils::start_gossip(key, true).await?;
+
+    let addr = cmd.connect.endpoint_addr();
     // force connect and handle the connection
-    let conn = router
-        .endpoint()
-        .connect(addr.clone(), iroh_gossip::ALPN)
-        .await?;
-    gossip.handle_connection(conn).await?;
+    let conn = endpoint.connect(addr.clone(), proto::ALPN).await?;
 
     pb.finish_and_clear();
 
-    let topic_id = make_topic(cmd.multi_sig_addr);
+    let (send, recv) = conn.open_bi().await?;
 
-    let mut topic = gossip.subscribe_and_join(topic_id, vec![addr.id]).await?;
+    let mut read = FramedRead::new(recv, proto::Codec::default());
+    let mut write = FramedWrite::new(send, proto::Codec::default());
 
-    while let Some(Ok(event)) = topic.next().await {
-        match event {
-            Event::NeighborUp(public_key) => {
-                println!("Neighbor up: {public_key}");
-            }
-            Event::NeighborDown(public_key) => {
-                println!("Neighbor down: {public_key}");
-            }
-            Event::Received(incoming) => {
-                let msg: Message = rmp_serde::from_slice(&incoming.content).map_err(|err| {
-                    anyhow::anyhow!("unable to decode content: {err}: {:?}", incoming.content)
-                })?;
-                match msg {
-                    Message::Action(nonce, action) => {
-                        println!("{:#?}", action);
-                        print!("Accept (y/n)? ");
-                        let _ = stdout().flush();
-                        let mut input = [0u8; 1];
-                        let _ = stdin().read_exact(&mut input);
-                        if input[0] == b'y' {
-                            let signature = utils::sign(&signer, nonce, cmd.chain, action).await?;
-                            let data = rmp_serde::to_vec(&Message::Signature(signature))?;
-                            topic.broadcast(data.into()).await?;
-                        } else {
-                            println!("Rejected");
-                        }
+    let _ = write.send(proto::Message::Hello).await;
 
-                        break;
-                    }
-                    Message::Signature(_) => {
-                        // do nothing
-                    }
-                }
+    match read.next().await {
+        Some(Ok(proto::Message::Action(nonce, action))) => {
+            println!("{:#?}", action);
+            print!("Accept (y/n)? ");
+            let _ = stdout().flush();
+            let mut input = [0u8; 1];
+            let _ = stdin().read_exact(&mut input).await;
+            if input[0] == b'y' {
+                let signature = action.sign(&signer, nonce, cmd.chain).await?;
+                write.send(proto::Message::Signature(signature)).await?;
+            } else {
+                println!("Rejected");
             }
-            Event::Lagged => {}
+        }
+        _ => {
+            panic!("unexpected message");
         }
     }
 
-    router.shutdown().await?;
+    conn.closed().await;
+    endpoint.close().await;
 
     Ok(())
 }
@@ -304,7 +342,7 @@ async fn execute_multisig_action(
     multi_sig_addr: Address,
     hl: HttpClient,
     signer: Box<dyn Signer + Send + Sync>,
-    action: Action,
+    inner_action: Action,
     nonce: u64,
     multisig_config: &hypersdk::hypercore::MultiSigConfig,
 ) -> anyhow::Result<()> {
@@ -318,16 +356,14 @@ async fn execute_multisig_action(
             .tick_strings(CONNECTING_STRINGS),
     );
 
-    let (ticket, gossip, router) = utils::start_gossip(key, true).await?;
+    let (endpoint, ticket) = utils::start_gossip(key, true).await?;
 
     pb.finish_and_clear();
-
-    let topic_id = make_topic(multi_sig_addr);
 
     let action = MultiSigPayload {
         multi_sig_user: multi_sig_addr.to_string().to_lowercase(),
         outer_signer: signer.address().to_string().to_lowercase(),
-        action: Box::new(action),
+        action: Box::new(inner_action),
     };
 
     let mut signatures = vec![];
@@ -340,54 +376,47 @@ async fn execute_multisig_action(
             "Using current signer {} to sign message:\n{action:#?}",
             signer.address()
         );
-        signatures.push(utils::sign(&signer, nonce, hl.chain(), action.clone()).await?);
+        signatures.push(action.sign(&signer, nonce, hl.chain()).await?);
         pb.inc(1);
     }
 
-    // Subscribe to the topic
-    let mut topic = gossip.subscribe(topic_id, vec![]).await?;
+    let (tx, mut rx) = unbounded_channel();
+    let router = Router::builder(endpoint)
+        .accept(
+            proto::ALPN,
+            proto::Serve((nonce, action.clone(), tx.clone())),
+        )
+        .spawn();
 
-    pb.set_message(format!(
-        "Authorized users: {:?}\n\nhypecli multisig sign --multi-sig-addr {} --chain {} --connect {}",
-        multisig_config.authorized_users, multi_sig_addr, hl.chain(), ticket
-    ));
+    let mut msgs = String::new();
+
+    use std::fmt::Write;
 
     while signatures.len() < multisig_config.threshold {
+        pb.set_message(format!(
+            "Authorized users: {:?}\n{msgs}\nhypecli multisig sign --multi-sig-addr {} --chain {} --connect {}",
+            multisig_config.authorized_users, multi_sig_addr, hl.chain(), ticket
+        ));
+
         tokio::select! {
             _ = ctrl_c() => {
                 router.shutdown().await?;
                 return Ok(());
             }
-            res = topic.next() => {
-                match res {
-                    Some(Ok(event)) => {
-                        match event {
-                            Event::NeighborUp(_public_key) => {
-                                let reply = rmp_serde::to_vec(&Message::Action(nonce, action.clone()))?;
-                                topic.broadcast(reply.into()).await?;
-                            }
-                            Event::NeighborDown(_public_key) => {
-                                // ignore
-                            }
-                            Event::Received(incoming) => {
-                                let msg: Message = rmp_serde::from_slice(&incoming.content)?;
-                                match msg {
-                                    Message::Action(_, _) => {
-                                        // ignore
-                                    }
-                                    Message::Signature(signature) => {
-                                        pb.inc(1);
-                                        println!("Received: {signature}");
-                                        signatures.push(signature);
-                                    }
-                                }
-                            }
-                            Event::Lagged => {}
+            Some(signature) = rx.recv() => {
+                writeln!(&mut msgs, "> Receive signature {signature}")?;
+                match action.recover(&signature, nonce, hl.chain()) {
+                    Ok(address) => {
+                        if !multisig_config.authorized_users.contains(&address) {
+                            writeln!(&mut msgs, ">X Received signature from unauthorized user {address}")?;
+                        } else {
+                            pb.inc(1);
+                            writeln!(&mut msgs, "> Received: {signature}")?;
+                            signatures.push(signature);
                         }
                     }
-                    _ => {
-                        pb.finish();
-                        panic!("something went wrong: {res:?}");
+                    Err(err) => {
+                        let _ = writeln!(&mut msgs, ">X unable to verify signature: {err}");
                     }
                 }
             }
@@ -424,4 +453,93 @@ async fn execute_multisig_action(
     router.shutdown().await?;
 
     Ok(())
+}
+
+mod proto {
+    use super::*;
+    use bytes::{Bytes, BytesMut};
+    use futures::SinkExt;
+    use iroh::protocol::ProtocolHandler;
+    use tokio::sync::mpsc::UnboundedSender;
+    use tokio_util::codec::{self, LengthDelimitedCodec};
+
+    pub const ALPN: &[u8] = b"/hypersdk-multisig/0";
+
+    /// Messages exchanged over the gossip network during multi-sig coordination.
+    #[derive(Serialize, Deserialize)]
+    pub enum Message {
+        /// We need to write something when opening the connection
+        ///
+        /// https://docs.rs/iroh/latest/iroh/endpoint/struct.Connection.html#method.accept_bi
+        Hello,
+        /// A proposed action with its nonce that needs to be signed.
+        Action(u64, MultiSigPayload),
+        /// A signature from an authorized signer.
+        Signature(Signature),
+    }
+
+    #[derive(Default)]
+    pub struct Codec {
+        inner: LengthDelimitedCodec,
+    }
+
+    impl codec::Decoder for Codec {
+        type Item = Message;
+        type Error = anyhow::Error;
+
+        fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+            let payload = match self.inner.decode(src)? {
+                Some(data) => data,
+                None => {
+                    return Ok(None);
+                }
+            };
+
+            let msg = rmp_serde::from_slice(&payload)?;
+            Ok(Some(msg))
+        }
+    }
+
+    impl codec::Encoder<Message> for Codec {
+        type Error = anyhow::Error;
+
+        fn encode(&mut self, item: Message, dst: &mut BytesMut) -> Result<(), Self::Error> {
+            let msg = rmp_serde::to_vec(&item)?;
+            self.inner.encode(Bytes::from(msg), dst)?;
+            Ok(())
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct Serve(pub (u64, MultiSigPayload, UnboundedSender<Signature>));
+
+    impl ProtocolHandler for Serve {
+        fn accept(
+            &self,
+            connection: Connection,
+        ) -> impl Future<Output = Result<(), iroh::protocol::AcceptError>> + Send {
+            let (nonce, action, tx) = self.clone().0;
+            async move {
+                let (send, recv) = connection.accept_bi().await?;
+
+                let mut read = FramedRead::new(recv, proto::Codec::default());
+                let mut write = FramedWrite::new(send, proto::Codec::default());
+
+                let _ = write.send(Message::Action(nonce, action)).await;
+                loop {
+                    match read.next().await {
+                        Some(Ok(Message::Signature(sig))) => {
+                            let _ = tx.send(sig);
+                            break Ok(());
+                        }
+                        // just read the Hello
+                        Some(Ok(Message::Hello)) => {}
+                        _ => {
+                            println!("received unexpected msg");
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
