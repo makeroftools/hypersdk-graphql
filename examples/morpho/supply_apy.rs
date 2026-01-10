@@ -65,7 +65,7 @@ struct Cli {
     #[arg(short, long)]
     market_id: FixedBytes<32>,
     /// RPC url
-    #[arg(short, long, default_value = "http://127.0.0.1:8545")]
+    #[arg(short, long, default_value = "https://rpc.hyperliquid.xyz/evm")]
     rpc_url: String,
 }
 

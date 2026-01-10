@@ -56,6 +56,8 @@
 //! # }
 //! ```
 
+use std::ops::{Add, Div, Mul, Sub};
+
 use alloy::{
     primitives::{Address, FixedBytes, U256},
     providers::Provider,
@@ -113,16 +115,18 @@ pub struct PoolApy {
 pub struct VaultApy {
     /// Individual markets that compose this vault
     pub components: Vec<VaultSupply>,
-    /// Vault management fee as a decimal (0.10 = 10%)
-    pub fee: f64,
-    /// Total assets deposited into the vault
-    pub total_deposits: f64,
+    /// Vault management fee (raw U256 value, divide by 1e18)
+    pub fee: U256,
+    /// Total assets deposited into the vault (raw U256 value)
+    pub total_deposits: U256,
 }
 
 #[derive(Debug, Clone)]
 pub struct VaultSupply {
     pub supplied_shares: U256,
     pub pool: PoolApy,
+    /// Supply APY as U256 (scaled by 1e18, e.g., 0.05 * 1e18 = 5% APY)
+    pub supply_apy: U256,
 }
 
 impl VaultApy {
@@ -131,71 +135,82 @@ impl VaultApy {
     /// This is a weighted average of all underlying market APYs, adjusted for
     /// the vault's management fee.
     ///
+    /// # Type Parameters
+    ///
+    /// - `T`: The numeric type to use for calculations (e.g., f64, Decimal, etc.)
+    ///   Must support arithmetic operations and conversion from U256.
+    /// - `F`: Conversion function from U256 to T
+    ///
+    /// # Arguments
+    ///
+    /// - `convert`: Function to convert U256 values to your numeric type
+    ///
     /// # Returns
     ///
-    /// The APY as a decimal (e.g., 0.05 = 5%).
+    /// The APY in your chosen numeric type.
     ///
     /// # Example
     ///
-    /// Calculate vault APY: `vault_apy.apy()` returns the effective APY as a decimal.
+    /// ```no_run
+    /// use hypersdk::hyperevm::morpho;
+    /// use hypersdk::Address;
+    ///
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let client = morpho::MetaClient::mainnet().await?;
+    /// let vault_addr: Address = "0x...".parse()?;
+    /// let vault_apy = client.apy(vault_addr).await?;
+    ///
+    /// // Using f64
+    /// let apy_f64 = vault_apy.apy(|u| u.to::<u128>() as f64);
+    ///
+    /// // Using a custom Decimal type (rust_decimal example)
+    /// // let apy_decimal = vault_apy.apy(|u| Decimal::from_u128(u.to::<u128>()).unwrap());
+    /// # Ok(())
+    /// # }
+    /// ```
     #[must_use]
-    pub fn apy(&self) -> f64 {
-        if self.total_deposits == 0.0 {
-            return 0.0;
+    pub fn apy<T, F>(&self, convert: F) -> T
+    where
+        T: Add<Output = T> + Sub<Output = T> + Mul<Output = T> + Div<Output = T> + Copy,
+        F: Fn(U256) -> T,
+    {
+        let zero = convert(U256::ZERO);
+        let million = convert(U256::from(1_000_000u128));
+        let wad = convert(U256::from(1_000_000_000_000_000_000u128)); // 1e18
+
+        if self.total_deposits.is_zero() {
+            return zero;
         }
 
-        self.components
+        let total_deposits = convert(self.total_deposits);
+        let fee = convert(self.fee);
+
+        // Calculate fee as decimal: 1 - (fee / 1e18)
+        let fee_multiplier = wad - fee;
+
+        let gross_apy = self
+            .components
             .iter()
             .map(|component| {
-                // Calculate supplied shares (see Morpho SharesMathLib.sol)
-                let supplied_shares =
-                    (component.supplied_shares / U256::from(1_000_000u64)).to::<u64>() as f64;
+                let supplied_shares = convert(component.supplied_shares) / million;
+                let total_supply_assets =
+                    convert(U256::from(component.pool.market.totalSupplyAssets));
+                let total_supply_shares =
+                    convert(U256::from(component.pool.market.totalSupplyShares));
+                let supply_apy = convert(component.supply_apy);
 
                 // Convert shares to assets using price per share
-                let price_per_share = if component.pool.market.totalSupplyShares == 0 {
-                    0.0
-                } else {
-                    component.pool.market.totalSupplyAssets as f64
-                        / component.pool.market.totalSupplyShares as f64
-                };
-
+                let price_per_share = total_supply_assets / total_supply_shares;
                 let supplied_assets = price_per_share * supplied_shares;
 
                 // Weight by proportion of total deposits
-                let weight = supplied_assets / self.total_deposits;
-                weight * component.pool.supply
+                let weight = supplied_assets / total_deposits;
+
+                weight * supply_apy / wad
             })
-            .sum::<f64>()
-            * (1.0 - self.fee)
-    }
+            .fold(zero, |acc, x| acc + x);
 
-    /// Returns the gross APY before fees.
-    ///
-    /// This is the weighted average APY without subtracting the management fee.
-    #[must_use]
-    pub fn gross_apy(&self) -> f64 {
-        if self.total_deposits == 0.0 {
-            return 0.0;
-        }
-
-        self.components
-            .iter()
-            .map(|component| {
-                let supplied_shares =
-                    (component.supplied_shares / U256::from(1_000_000u64)).to::<u64>() as f64;
-
-                let price_per_share = if component.pool.market.totalSupplyShares == 0 {
-                    0.0
-                } else {
-                    component.pool.market.totalSupplyAssets as f64
-                        / component.pool.market.totalSupplyShares as f64
-                };
-
-                let supplied_assets = price_per_share * supplied_shares;
-                let weight = supplied_assets / self.total_deposits;
-                weight * component.pool.supply
-            })
-            .sum()
+        gross_apy * fee_multiplier / wad
     }
 
     /// Returns the number of markets in the vault.
@@ -429,18 +444,14 @@ where
             .add(meta_morpho.MORPHO())
             .aggregate()
             .await?;
-        // vault fee
-        let fee = fee.to::<u64>() as f64 / 1e18;
-        // total deposits in the vault
-        let total_deposits = (total_supply / U256::from(1e18)).to::<u64>() as f64;
         let supply_queue_len = supply_queue_len.to::<usize>();
 
         let morpho = IMorpho::new(morpho_addr, self.provider.clone());
 
         let mut apy = VaultApy {
             components: vec![],
-            fee,
-            total_deposits,
+            fee: U256::from(fee),
+            total_deposits: total_supply,
         };
         for i in 0..supply_queue_len {
             // TODO: is there a way to aggregate this?
@@ -473,9 +484,13 @@ where
                 .apy_with(params, market)
                 .await?;
 
+            // Convert f64 supply APY to U256 (scaled by 1e18)
+            let supply_apy = U256::from((pool.supply * 1e18) as u128);
+
             apy.components.push(VaultSupply {
                 supplied_shares: position.supplyShares,
                 pool,
+                supply_apy,
             });
         }
 

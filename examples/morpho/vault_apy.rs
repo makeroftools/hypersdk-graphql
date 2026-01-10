@@ -62,7 +62,7 @@ struct Cli {
     )]
     contract_address: Address,
     /// RPC url
-    #[arg(short, long, default_value = "http://127.0.0.1:8545")]
+    #[arg(short, long, default_value = "https://rpc.hyperliquid.xyz/evm")]
     rpc_url: String,
 }
 
@@ -77,7 +77,10 @@ async fn main() -> anyhow::Result<()> {
     let provider = DynProvider::new(hyperevm::mainnet_with_url(&args.rpc_url).await?);
     let vault = MetaClient::new(provider).apy(args.contract_address).await?;
 
-    println!("apy: {}", vault.apy() * 100.0);
+    println!(
+        "apy: {}%",
+        vault.apy(|v| v.to::<i128>() as f64 / 1e18) * 100.0
+    );
 
     Ok(())
 }
