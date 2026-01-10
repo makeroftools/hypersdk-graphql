@@ -126,125 +126,6 @@ const CONNECTING_STRINGS: &[&str] = &[
     "ConnectinG",
 ];
 
-/// Execute a multisig action by collecting signatures from authorized signers.
-///
-/// This is the core multisig execution logic used by all multisig commands.
-async fn execute_multisig_action(
-    multi_sig_addr: Address,
-    hl: HttpClient,
-    signer: Box<dyn Signer + Send + Sync>,
-    action: Action,
-    nonce: u64,
-    multisig_config: &hypersdk::hypercore::MultiSigConfig,
-) -> anyhow::Result<()> {
-    let key = utils::make_key(&signer);
-
-    let pb = ProgressBar::new_spinner();
-    pb.enable_steady_tick(Duration::from_millis(100));
-    pb.set_style(
-        ProgressStyle::with_template("{spinner} {msg}")
-            .unwrap()
-            .tick_strings(CONNECTING_STRINGS),
-    );
-
-    let (ticket, gossip, router) = utils::start_gossip(key, true).await?;
-
-    pb.finish_and_clear();
-
-    let topic_id = make_topic(multi_sig_addr);
-
-    let action = MultiSigPayload {
-        multi_sig_user: multi_sig_addr.to_string().to_lowercase(),
-        outer_signer: signer.address().to_string().to_lowercase(),
-        action: Box::new(action),
-    };
-
-    let mut signatures = vec![];
-
-    let pb = ProgressBar::new(multisig_config.threshold as u64);
-    pb.set_style(ProgressStyle::with_template("{msg}\nAuthorized {pos}/{len}").unwrap());
-
-    if multisig_config.authorized_users.contains(&signer.address()) {
-        println!("Using current signer {} to sign message", signer.address());
-        signatures.push(utils::sign(&signer, nonce, hl.chain(), action.clone()).await?);
-        pb.inc(1);
-    }
-
-    // Subscribe to the topic
-    let mut topic = gossip.subscribe(topic_id, vec![]).await?;
-
-    pb.set_message(format!(
-        "Authorized users: {:?}\n\nhypecli multisig sign --multi-sig-addr {} --chain {} --connect {}",
-        multisig_config.authorized_users, multi_sig_addr, hl.chain(), ticket
-    ));
-
-    while signatures.len() < multisig_config.threshold {
-        tokio::select! {
-            _ = ctrl_c() => {
-                router.shutdown().await?;
-                return Ok(());
-            }
-            res = topic.next() => {
-                match res {
-                    Some(Ok(event)) => {
-                        match event {
-                            Event::NeighborUp(_public_key) => {
-                                let reply = rmp_serde::to_vec(&Message::Action(nonce, action.clone()))?;
-                                topic.broadcast(reply.into()).await?;
-                            }
-                            Event::NeighborDown(_public_key) => {
-                                // ignore
-                            }
-                            Event::Received(incoming) => {
-                                let msg: Message = rmp_serde::from_slice(&incoming.content)?;
-                                match msg {
-                                    Message::Action(_, _) => {
-                                        // ignore
-                                    }
-                                    Message::Signature(signature) => {
-                                        pb.inc(1);
-                                        println!("Received: {signature}");
-                                        signatures.push(signature);
-                                    }
-                                }
-                            }
-                            Event::Lagged => {}
-                        }
-                    }
-                    _ => {
-                        pb.finish();
-                        panic!("something went wrong: {res:?}");
-                    }
-                }
-            }
-        }
-    }
-
-    pb.finish_and_clear();
-
-    let multi_sig_action = MultiSigAction {
-        signature_chain_id: hl.chain().arbitrum_id().to_owned(),
-        signatures,
-        payload: action,
-    };
-
-    let req = hypercore::signing::multisig_lead_msg(
-        &signer,
-        multi_sig_action,
-        nonce,
-        None,
-        None,
-        hl.chain(),
-    )
-    .await?;
-    let res = hl.send(req).await?;
-    println!("{res:?}");
-
-    router.shutdown().await?;
-
-    Ok(())
-}
-
 async fn send_asset(cmd: MultiSigSendAsset) -> anyhow::Result<()> {
     let hl = HttpClient::new(cmd.chain);
     let multisig_config = hl.multi_sig_config(cmd.multi_sig_addr).await?;
@@ -357,7 +238,13 @@ async fn sign(cmd: MultiSigSign) -> anyhow::Result<()> {
             .tick_strings(CONNECTING_STRINGS),
     );
 
-    let (_ticket, gossip, router) = utils::start_gossip(key, true).await?;
+    let (_ticket, gossip, router) = utils::start_gossip(key, false).await?;
+    // force connect and handle the connection
+    let conn = router
+        .endpoint()
+        .connect(addr.clone(), iroh_gossip::ALPN)
+        .await?;
+    gossip.handle_connection(conn).await?;
 
     pb.finish_and_clear();
 
@@ -402,6 +289,128 @@ async fn sign(cmd: MultiSigSign) -> anyhow::Result<()> {
             Event::Lagged => {}
         }
     }
+
+    router.shutdown().await?;
+
+    Ok(())
+}
+
+/// Execute a multisig action by collecting signatures from authorized signers.
+///
+/// This is the core multisig execution logic used by all multisig commands.
+async fn execute_multisig_action(
+    multi_sig_addr: Address,
+    hl: HttpClient,
+    signer: Box<dyn Signer + Send + Sync>,
+    action: Action,
+    nonce: u64,
+    multisig_config: &hypersdk::hypercore::MultiSigConfig,
+) -> anyhow::Result<()> {
+    let key = utils::make_key(&signer);
+
+    let pb = ProgressBar::new_spinner();
+    pb.enable_steady_tick(Duration::from_millis(100));
+    pb.set_style(
+        ProgressStyle::with_template("{spinner} {msg}")
+            .unwrap()
+            .tick_strings(CONNECTING_STRINGS),
+    );
+
+    let (ticket, gossip, router) = utils::start_gossip(key, true).await?;
+
+    pb.finish_and_clear();
+
+    let topic_id = make_topic(multi_sig_addr);
+
+    let action = MultiSigPayload {
+        multi_sig_user: multi_sig_addr.to_string().to_lowercase(),
+        outer_signer: signer.address().to_string().to_lowercase(),
+        action: Box::new(action),
+    };
+
+    let mut signatures = vec![];
+
+    let pb = ProgressBar::new(multisig_config.threshold as u64);
+    pb.set_style(ProgressStyle::with_template("{msg}\nAuthorized {pos}/{len}").unwrap());
+
+    if multisig_config.authorized_users.contains(&signer.address()) {
+        println!(
+            "Using current signer {} to sign message:\n{action:#?}",
+            signer.address()
+        );
+        signatures.push(utils::sign(&signer, nonce, hl.chain(), action.clone()).await?);
+        pb.inc(1);
+    }
+
+    // Subscribe to the topic
+    let mut topic = gossip.subscribe(topic_id, vec![]).await?;
+
+    pb.set_message(format!(
+        "Authorized users: {:?}\n\nhypecli multisig sign --multi-sig-addr {} --chain {} --connect {}",
+        multisig_config.authorized_users, multi_sig_addr, hl.chain(), ticket
+    ));
+
+    while signatures.len() < multisig_config.threshold {
+        tokio::select! {
+            _ = ctrl_c() => {
+                router.shutdown().await?;
+                return Ok(());
+            }
+            res = topic.next() => {
+                match res {
+                    Some(Ok(event)) => {
+                        match event {
+                            Event::NeighborUp(_public_key) => {
+                                let reply = rmp_serde::to_vec(&Message::Action(nonce, action.clone()))?;
+                                topic.broadcast(reply.into()).await?;
+                            }
+                            Event::NeighborDown(_public_key) => {
+                                // ignore
+                            }
+                            Event::Received(incoming) => {
+                                let msg: Message = rmp_serde::from_slice(&incoming.content)?;
+                                match msg {
+                                    Message::Action(_, _) => {
+                                        // ignore
+                                    }
+                                    Message::Signature(signature) => {
+                                        pb.inc(1);
+                                        println!("Received: {signature}");
+                                        signatures.push(signature);
+                                    }
+                                }
+                            }
+                            Event::Lagged => {}
+                        }
+                    }
+                    _ => {
+                        pb.finish();
+                        panic!("something went wrong: {res:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    pb.finish_and_clear();
+
+    let multi_sig_action = MultiSigAction {
+        signature_chain_id: hl.chain().arbitrum_id().to_owned(),
+        signatures,
+        payload: action,
+    };
+
+    let req = hypercore::signing::multisig_lead_msg(
+        &signer,
+        multi_sig_action,
+        nonce,
+        None,
+        None,
+        hl.chain(),
+    )
+    .await?;
+    let res = hl.send(req).await?;
+    println!("{res:?}");
 
     router.shutdown().await?;
 
