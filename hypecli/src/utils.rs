@@ -9,6 +9,7 @@
 use std::{env::home_dir, str::FromStr};
 
 use alloy::signers::{self, Signer, ledger::LedgerSigner};
+use anyhow::Context;
 use hypersdk::{Address, hypercore::PrivateKeySigner};
 use iroh::{
     Endpoint, SecretKey,
@@ -104,6 +105,7 @@ pub async fn find_signer(
     } else if let Some(filename) = cmd.keystore.as_ref() {
         let home_dir = home_dir().ok_or(anyhow::anyhow!("unable to locate home dir"))?;
         let keypath = home_dir.join(".foundry").join("keystores").join(filename);
+        anyhow::ensure!(keypath.exists(), "keystore {filename} doesn't exist");
         let password = cmd
             .password
             .clone()
@@ -115,7 +117,9 @@ pub async fn find_signer(
                 .ok()
             })
             .ok_or(anyhow::anyhow!("keystores require a password!"))?;
-        Ok(Box::new(PrivateKeySigner::decrypt_keystore(keypath, password)?) as Box<_>)
+        Ok(Box::new(
+            PrivateKeySigner::decrypt_keystore(keypath, password).context("decrypt_keystore")?,
+        ) as Box<_>)
     } else {
         for i in 0..10 {
             if let Ok(ledger) =
