@@ -442,10 +442,10 @@ async fn execute_multisig_action(
     .await?;
 
     match hl.send(req).await? {
-        api::ApiResponse::Ok(_) => {
+        api::Response::Ok(_) => {
             println!("Success");
         }
-        api::ApiResponse::Err(err) => {
+        api::Response::Err(err) => {
             println!("error: {err}");
         }
     }
