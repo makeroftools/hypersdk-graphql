@@ -6,7 +6,7 @@
 use alloy::{
     dyn_abi::TypedData,
     primitives::{Address, B256},
-    signers::{Signer, SignerSync},
+    signers::{Signer, SignerSync, k256::ecdsa::RecoveryId},
 };
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -229,6 +229,60 @@ pub(super) trait Signable: Serialize + Clone {
         maybe_expires_after: Option<DateTime<Utc>>,
         chain: Chain,
     ) -> anyhow::Result<ActionRequest>;
+
+    /// Returns the prehash (FixedBytes<32>) that should be signed for this action.
+    ///
+    /// For EIP-712 typed data actions (transfers), this returns the EIP-712 signing hash.
+    /// For RMP-based actions (orders, cancels), this returns the RMP hash of the action.
+    ///
+    /// # Parameters
+    ///
+    /// - `nonce`: Unique transaction nonce (typically millisecond timestamp)
+    /// - `maybe_vault_address`: Optional vault address if trading on behalf of a vault
+    /// - `maybe_expires_after`: Optional expiration time for the request
+    /// - `chain`: The chain (mainnet or testnet)
+    ///
+    /// # Returns
+    ///
+    /// The B256 hash that should be signed for this action.
+    fn prehash(
+        self,
+        nonce: u64,
+        maybe_vault_address: Option<Address>,
+        maybe_expires_after: Option<DateTime<Utc>>,
+        chain: Chain,
+    ) -> anyhow::Result<B256>;
+
+    /// Recovers the address that signed this action given a signature.
+    ///
+    /// This is a default implementation that will be filled in with recovery logic.
+    ///
+    /// # Parameters
+    ///
+    /// - `signature`: The signature to verify
+    /// - `nonce`: Unique transaction nonce used when signing
+    /// - `maybe_vault_address`: Optional vault address if trading on behalf of a vault
+    /// - `maybe_expires_after`: Optional expiration time for the request
+    /// - `chain`: The chain (mainnet or testnet)
+    ///
+    /// # Returns
+    ///
+    /// The address that created the signature.
+    fn recover(
+        self,
+        signature: &Signature,
+        nonce: u64,
+        maybe_vault_address: Option<Address>,
+        maybe_expires_after: Option<DateTime<Utc>>,
+        chain: Chain,
+    ) -> anyhow::Result<Address> {
+        // Default implementation - to be filled in
+        let recid = RecoveryId::from_byte(signature.v as u8 - 27_u8)
+            .ok_or_else(|| anyhow::anyhow!("unable to convert recovery_id: {}", signature.v))?;
+        let sig = alloy::signers::Signature::new(signature.r, signature.s, recid.is_y_odd());
+        let prehash = self.prehash(nonce, maybe_vault_address, maybe_expires_after, chain)?;
+        Ok(sig.recover_address_from_prehash(&prehash)?)
+    }
 }
 
 // RMP-based actions (orders, cancels, modifications)
@@ -270,6 +324,22 @@ impl Signable for BatchOrder {
         )
         .await
     }
+
+    fn prehash(
+        self,
+        nonce: u64,
+        maybe_vault_address: Option<Address>,
+        maybe_expires_after: Option<DateTime<Utc>>,
+        chain: Chain,
+    ) -> anyhow::Result<B256> {
+        let expires_after = maybe_expires_after.map(|after| after.timestamp_millis() as u64);
+        let connection_id = Action::Order(self)
+            .hash(nonce, maybe_vault_address, expires_after)
+            .map_err(|e| anyhow::anyhow!("Failed to hash action: {}", e))?;
+
+        // For RMP-based actions, we sign the Agent struct, not the hash directly
+        Ok(agent_signing_hash(chain, connection_id))
+    }
 }
 
 impl Signable for BatchModify {
@@ -308,6 +378,22 @@ impl Signable for BatchModify {
             chain,
         )
         .await
+    }
+
+    fn prehash(
+        self,
+        nonce: u64,
+        maybe_vault_address: Option<Address>,
+        maybe_expires_after: Option<DateTime<Utc>>,
+        chain: Chain,
+    ) -> anyhow::Result<B256> {
+        let expires_after = maybe_expires_after.map(|after| after.timestamp_millis() as u64);
+        let connection_id = Action::BatchModify(self)
+            .hash(nonce, maybe_vault_address, expires_after)
+            .map_err(|e| anyhow::anyhow!("Failed to hash action: {}", e))?;
+
+        // For RMP-based actions, we sign the Agent struct, not the hash directly
+        Ok(agent_signing_hash(chain, connection_id))
     }
 }
 
@@ -348,6 +434,22 @@ impl Signable for BatchCancel {
         )
         .await
     }
+
+    fn prehash(
+        self,
+        nonce: u64,
+        maybe_vault_address: Option<Address>,
+        maybe_expires_after: Option<DateTime<Utc>>,
+        chain: Chain,
+    ) -> anyhow::Result<B256> {
+        let expires_after = maybe_expires_after.map(|after| after.timestamp_millis() as u64);
+        let connection_id = Action::Cancel(self)
+            .hash(nonce, maybe_vault_address, expires_after)
+            .map_err(|e| anyhow::anyhow!("Failed to hash action: {}", e))?;
+
+        // For RMP-based actions, we sign the Agent struct, not the hash directly
+        Ok(agent_signing_hash(chain, connection_id))
+    }
 }
 
 impl Signable for BatchCancelCloid {
@@ -386,6 +488,22 @@ impl Signable for BatchCancelCloid {
             chain,
         )
         .await
+    }
+
+    fn prehash(
+        self,
+        nonce: u64,
+        maybe_vault_address: Option<Address>,
+        maybe_expires_after: Option<DateTime<Utc>>,
+        chain: Chain,
+    ) -> anyhow::Result<B256> {
+        let expires_after = maybe_expires_after.map(|after| after.timestamp_millis() as u64);
+        let connection_id = Action::CancelByCloid(self)
+            .hash(nonce, maybe_vault_address, expires_after)
+            .map_err(|e| anyhow::anyhow!("Failed to hash action: {}", e))?;
+
+        // For RMP-based actions, we sign the Agent struct, not the hash directly
+        Ok(agent_signing_hash(chain, connection_id))
     }
 }
 
@@ -426,6 +544,22 @@ impl Signable for ScheduleCancel {
         )
         .await
     }
+
+    fn prehash(
+        self,
+        nonce: u64,
+        maybe_vault_address: Option<Address>,
+        maybe_expires_after: Option<DateTime<Utc>>,
+        chain: Chain,
+    ) -> anyhow::Result<B256> {
+        let expires_after = maybe_expires_after.map(|after| after.timestamp_millis() as u64);
+        let connection_id = Action::ScheduleCancel(self)
+            .hash(nonce, maybe_vault_address, expires_after)
+            .map_err(|e| anyhow::anyhow!("Failed to hash action: {}", e))?;
+
+        // For RMP-based actions, we sign the Agent struct, not the hash directly
+        Ok(agent_signing_hash(chain, connection_id))
+    }
 }
 
 // EIP-712 typed data actions (transfers and asset movements)
@@ -454,6 +588,17 @@ impl Signable for UsdSendAction {
         let typed_data = get_typed_data::<solidity::UsdSend>(&self, chain, None);
         sign_eip712(signer, Action::UsdSend(self), typed_data, nonce).await
     }
+
+    fn prehash(
+        self,
+        _nonce: u64,
+        _maybe_vault_address: Option<Address>,
+        _maybe_expires_after: Option<DateTime<Utc>>,
+        chain: Chain,
+    ) -> anyhow::Result<B256> {
+        let typed_data = get_typed_data::<solidity::UsdSend>(&self, chain, None);
+        Ok(typed_data.eip712_signing_hash()?)
+    }
 }
 
 impl Signable for SendAssetAction {
@@ -479,6 +624,17 @@ impl Signable for SendAssetAction {
     ) -> Result<ActionRequest> {
         let typed_data = get_typed_data::<solidity::SendAsset>(&self, chain, None);
         sign_eip712(signer, Action::SendAsset(self), typed_data, nonce).await
+    }
+
+    fn prehash(
+        self,
+        _nonce: u64,
+        _maybe_vault_address: Option<Address>,
+        _maybe_expires_after: Option<DateTime<Utc>>,
+        chain: Chain,
+    ) -> anyhow::Result<B256> {
+        let typed_data = get_typed_data::<solidity::SendAsset>(&self, chain, None);
+        Ok(typed_data.eip712_signing_hash()?)
     }
 }
 
@@ -506,6 +662,17 @@ impl Signable for SpotSendAction {
         let typed_data = get_typed_data::<solidity::SpotSend>(&self, chain, None);
         sign_eip712(signer, Action::SpotSend(self), typed_data, nonce).await
     }
+
+    fn prehash(
+        self,
+        _nonce: u64,
+        _maybe_vault_address: Option<Address>,
+        _maybe_expires_after: Option<DateTime<Utc>>,
+        chain: Chain,
+    ) -> anyhow::Result<B256> {
+        let typed_data = get_typed_data::<solidity::SpotSend>(&self, chain, None);
+        Ok(typed_data.eip712_signing_hash()?)
+    }
 }
 
 impl Signable for ApproveAgent {
@@ -531,6 +698,17 @@ impl Signable for ApproveAgent {
     ) -> Result<ActionRequest> {
         let typed_data = get_typed_data::<solidity::ApproveAgent>(&self, chain, None);
         sign_eip712(signer, Action::ApproveAgent(self), typed_data, nonce).await
+    }
+
+    fn prehash(
+        self,
+        _nonce: u64,
+        _maybe_vault_address: Option<Address>,
+        _maybe_expires_after: Option<DateTime<Utc>>,
+        chain: Chain,
+    ) -> anyhow::Result<B256> {
+        let typed_data = get_typed_data::<solidity::ApproveAgent>(&self, chain, None);
+        Ok(typed_data.eip712_signing_hash()?)
     }
 }
 
@@ -568,6 +746,17 @@ impl Signable for ConvertToMultiSigUser {
             nonce,
         )
         .await
+    }
+
+    fn prehash(
+        self,
+        _nonce: u64,
+        _maybe_vault_address: Option<Address>,
+        _maybe_expires_after: Option<DateTime<Utc>>,
+        chain: Chain,
+    ) -> anyhow::Result<B256> {
+        let typed_data = get_typed_data::<solidity::ConvertToMultiSigUser>(&self, chain, None);
+        Ok(typed_data.eip712_signing_hash()?)
     }
 }
 
@@ -607,6 +796,34 @@ impl Signable for MultiSigAction {
             chain,
         )
         .await
+    }
+
+    fn prehash(
+        self,
+        nonce: u64,
+        maybe_vault_address: Option<Address>,
+        maybe_expires_after: Option<DateTime<Utc>>,
+        chain: Chain,
+    ) -> anyhow::Result<B256> {
+        let expires_after = maybe_expires_after.map(|after| after.timestamp_millis() as u64);
+        let multsig_hash = rmp_hash(&self, nonce, maybe_vault_address, expires_after)?;
+
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Envelope {
+            hyperliquid_chain: String,
+            multi_sig_action_hash: String,
+            nonce: u64,
+        }
+
+        let envelope = Envelope {
+            hyperliquid_chain: chain.to_string(),
+            multi_sig_action_hash: multsig_hash.to_string(),
+            nonce,
+        };
+
+        let typed_data = get_typed_data::<solidity::SendMultiSig>(&envelope, chain, None);
+        Ok(typed_data.eip712_signing_hash()?)
     }
 }
 
@@ -692,6 +909,20 @@ pub(super) async fn sign_rmp<S: Signer + Send + Sync>(
         vault_address: maybe_vault_address,
         expires_after,
     })
+}
+
+/// Computes the EIP-712 signing hash for an Agent struct with the given connection ID.
+///
+/// This is used for RMP-based actions where the signature is over an Agent wrapper
+/// containing the RMP hash as the connection ID.
+#[inline(always)]
+pub(super) fn agent_signing_hash(chain: Chain, connection_id: B256) -> B256 {
+    use alloy::sol_types::SolStruct;
+    let agent = solidity::Agent {
+        source: if chain.is_mainnet() { "a" } else { "b" }.to_string(),
+        connectionId: connection_id,
+    };
+    agent.eip712_signing_hash(&CORE_MAINNET_EIP712_DOMAIN)
 }
 
 /// Signs an L1 action with EIP-712.
@@ -1043,5 +1274,81 @@ mod tests {
 
         let expected_sig = "0xeca6267bcaadc4c0ae1aed73f5a2c45fcdbb7271f2e9356992404e5d4bad75a3572e08fe93f17755abadb7f84be7d1e9c4ce48bb5633e339bc430c672d5a20ed1b";
         assert_eq!(signature.to_string(), expected_sig);
+    }
+
+    #[test]
+    fn test_recover_usd_send() {
+        let signer = get_signer();
+        let expected_address = signer.address();
+
+        let usd_send = types::raw::UsdSendAction {
+            signature_chain_id: ARBITRUM_MAINNET_CHAIN_ID.to_owned(),
+            hyperliquid_chain: Chain::Mainnet,
+            destination: "0x0D1d9635D0640821d15e323ac8AdADfA9c111414"
+                .parse()
+                .unwrap(),
+            amount: rust_decimal::Decimal::ONE,
+            time: 1690393044548,
+        };
+
+        // Sign the action
+        let nonce = 1690393044548u64;
+        let action_request = usd_send
+            .clone()
+            .sign_sync(&signer, nonce, None, None, Chain::Mainnet)
+            .unwrap();
+
+        // Recover the address from the signature
+        let recovered_address = usd_send
+            .recover(&action_request.signature, nonce, None, None, Chain::Mainnet)
+            .unwrap();
+
+        // Verify that the recovered address matches the signer's address
+        assert_eq!(
+            recovered_address, expected_address,
+            "Recovered address should match the signer's address"
+        );
+    }
+
+    #[test]
+    fn test_recover_batch_order() {
+        use rust_decimal::dec;
+        use types::{BatchOrder, OrderGrouping, OrderRequest, OrderTypePlacement, TimeInForce};
+
+        let signer = get_signer();
+        let expected_address = signer.address();
+
+        let order = BatchOrder {
+            orders: vec![OrderRequest {
+                asset: 0,
+                is_buy: true,
+                limit_px: dec!(50000),
+                sz: dec!(0.1),
+                reduce_only: false,
+                order_type: OrderTypePlacement::Limit {
+                    tif: TimeInForce::Gtc,
+                },
+                cloid: Default::default(),
+            }],
+            grouping: OrderGrouping::Na,
+        };
+
+        // Sign the action
+        let nonce = chrono::Utc::now().timestamp_millis() as u64;
+        let action_request = order
+            .clone()
+            .sign_sync(&signer, nonce, None, None, Chain::Mainnet)
+            .unwrap();
+
+        // Recover the address from the signature
+        let recovered_address = order
+            .recover(&action_request.signature, nonce, None, None, Chain::Mainnet)
+            .unwrap();
+
+        // Verify that the recovered address matches the signer's address
+        assert_eq!(
+            recovered_address, expected_address,
+            "Recovered address should match the signer's address for RMP-based action"
+        );
     }
 }

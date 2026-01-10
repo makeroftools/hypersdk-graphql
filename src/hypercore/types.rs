@@ -2336,6 +2336,65 @@ pub mod raw {
                 }
             }
         }
+
+        fn prehash(
+            self,
+            nonce: u64,
+            maybe_vault_address: Option<Address>,
+            maybe_expires_after: Option<DateTime<Utc>>,
+            chain: Chain,
+        ) -> anyhow::Result<B256> {
+            // Top-down delegation: Action dispatches to each variant's prehash implementation
+            match self {
+                Action::Order(inner) => {
+                    inner.prehash(nonce, maybe_vault_address, maybe_expires_after, chain)
+                }
+                Action::BatchModify(inner) => {
+                    inner.prehash(nonce, maybe_vault_address, maybe_expires_after, chain)
+                }
+                Action::Cancel(inner) => {
+                    inner.prehash(nonce, maybe_vault_address, maybe_expires_after, chain)
+                }
+                Action::CancelByCloid(inner) => {
+                    inner.prehash(nonce, maybe_vault_address, maybe_expires_after, chain)
+                }
+                Action::ScheduleCancel(inner) => {
+                    inner.prehash(nonce, maybe_vault_address, maybe_expires_after, chain)
+                }
+                Action::UsdSend(inner) => {
+                    inner.prehash(nonce, maybe_vault_address, maybe_expires_after, chain)
+                }
+                Action::SendAsset(inner) => {
+                    inner.prehash(nonce, maybe_vault_address, maybe_expires_after, chain)
+                }
+                Action::SpotSend(inner) => {
+                    inner.prehash(nonce, maybe_vault_address, maybe_expires_after, chain)
+                }
+                Action::ApproveAgent(agent) => {
+                    agent.prehash(nonce, maybe_vault_address, maybe_expires_after, chain)
+                }
+                Action::ConvertToMultiSigUser(convert) => {
+                    convert.prehash(nonce, maybe_vault_address, maybe_expires_after, chain)
+                }
+                Action::MultiSig(inner) => {
+                    inner.prehash(nonce, maybe_vault_address, maybe_expires_after, chain)
+                }
+                Action::EvmUserModify { .. } | Action::Noop => {
+                    // These variants use RMP hash wrapped in Agent struct
+                    let expires_after =
+                        maybe_expires_after.map(|after| after.timestamp_millis() as u64);
+                    let connection_id = self
+                        .hash(nonce, maybe_vault_address, expires_after)
+                        .map_err(|e| anyhow::anyhow!("Failed to hash action: {}", e))?;
+
+                    // For RMP-based actions, we sign the Agent struct, not the hash directly
+                    Ok(crate::hypercore::signing::agent_signing_hash(
+                        chain,
+                        connection_id,
+                    ))
+                }
+            }
+        }
     }
 
     /// Send USDC from the perpetual balance.
