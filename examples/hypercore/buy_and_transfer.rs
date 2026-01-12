@@ -1,7 +1,5 @@
 use std::{
-    env,
     future::poll_fn,
-    str::FromStr,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -14,9 +12,16 @@ use hypersdk::hypercore::{
 use rust_decimal::{Decimal, dec};
 use tokio::{sync::oneshot, time::interval};
 
-#[derive(Parser, Debug)]
+use crate::credentials::Credentials;
+
+mod credentials;
+
+#[derive(Parser, Debug, derive_more::Deref)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
+    #[deref]
+    #[command(flatten)]
+    common: Credentials,
     /// Token to transfer
     #[arg(short, long)]
     token: String,
@@ -30,14 +35,10 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    dotenvy::dotenv()?;
-
-    let private_key = env::var("PRIVATE_KEY")?;
-    let signer = hypercore::PrivateKeySigner::from_str(&private_key)?;
-
     let _ = simple_logger::init_with_level(log::Level::Debug);
 
     let args = Cli::parse();
+    let signer = args.get()?;
 
     let client = hypercore::mainnet();
 

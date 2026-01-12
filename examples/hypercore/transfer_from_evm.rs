@@ -1,5 +1,3 @@
-use std::{env, str::FromStr};
-
 use alloy::{network::TransactionBuilder, rpc::types::TransactionRequest};
 use clap::Parser;
 use hypersdk::{
@@ -8,9 +6,16 @@ use hypersdk::{
 };
 use rust_decimal::Decimal;
 
-#[derive(Parser, Debug)]
+use crate::credentials::Credentials;
+
+mod credentials;
+
+#[derive(Parser, Debug, derive_more::Deref)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
+    #[deref]
+    #[command(flatten)]
+    common: Credentials,
     /// Token to transfer
     #[arg(short, long)]
     token: String,
@@ -24,12 +29,10 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args = Cli::parse();
     let _ = simple_logger::init_with_level(log::Level::Debug);
 
-    dotenvy::dotenv()?;
-    let private_key = env::var("PRIVATE_KEY")?;
-    let signer = hypercore::PrivateKeySigner::from_str(&private_key)?;
+    let args = Cli::parse();
+    let signer = args.get()?;
 
     log::info!("Signer address: {}", signer.address());
 

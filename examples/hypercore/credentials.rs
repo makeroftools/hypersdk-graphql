@@ -1,4 +1,8 @@
-use std::{env::home_dir, path::PathBuf, str::FromStr};
+use std::{
+    env::{self, home_dir},
+    path::PathBuf,
+    str::FromStr,
+};
 
 use clap::Args;
 use hypersdk::hypercore::PrivateKeySigner;
@@ -20,7 +24,7 @@ impl Credentials {
     pub fn get(&self) -> anyhow::Result<PrivateKeySigner> {
         if let Some(key) = self.private_key.as_ref() {
             Ok(PrivateKeySigner::from_str(key.as_str())?)
-        } else {
+        } else if self.keystore.is_some() {
             match (self.keystore.as_ref(), self.keystore_password.as_ref()) {
                 (Some(keystore), Some(password)) => {
                     let path = home_dir()
@@ -43,6 +47,10 @@ impl Credentials {
                     "Missing credentials. Use --private-key or --keystore"
                 )),
             }
+        } else {
+            dotenvy::dotenv()?;
+            let private_key = env::var("PRIVATE_KEY")?;
+            Ok(PrivateKeySigner::from_str(private_key.as_str())?)
         }
     }
 }

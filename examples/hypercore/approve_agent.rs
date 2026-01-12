@@ -1,20 +1,21 @@
-use std::{
-    str::FromStr,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
 use hypersdk::{
     Address,
-    hypercore::{self, Chain, HttpClient},
+    hypercore::{Chain, HttpClient},
 };
 
-#[derive(Parser, Debug)]
+use crate::credentials::Credentials;
+
+mod credentials;
+
+#[derive(Parser, Debug, derive_more::Deref)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
-    /// Private key of the account approving the agent.
-    #[arg(short, long)]
-    private_key: String,
+    #[deref]
+    #[command(flatten)]
+    common: Credentials,
     /// Agent address to approve.
     #[arg(short, long)]
     agent: Option<Address>,
@@ -30,9 +31,9 @@ async fn main() -> anyhow::Result<()> {
     let _ = simple_logger::init_with_level(log::Level::Debug);
 
     let args = Cli::parse();
+    let signer = args.get()?;
 
     let client = HttpClient::new(args.chain);
-    let signer = hypercore::PrivateKeySigner::from_str(&args.private_key)?;
     let agent = args.agent.unwrap_or_else(Address::random);
 
     println!("Approving agent {} for account {}", agent, signer.address());
