@@ -145,6 +145,7 @@ pub enum Response {
 #[serde(rename_all = "camelCase")]
 pub enum OkResponse {
     Order { statuses: Vec<OrderResponseStatus> },
+    Cancel { statuses: Vec<OrderResponseStatus> },
     // should be ok?
     Default,
 }
@@ -785,4 +786,16 @@ pub struct MultiSigAction {
     pub signatures: Vec<Signature>,
     /// The multisig payload
     pub payload: MultiSigPayload,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_deser() {
+        let text =
+            r#"{"status":"ok","response":{"type":"cancel","data":{"statuses":["success"]}}}"#;
+        let data: Response = serde_json::from_str(text).unwrap();
+    }
 }

@@ -752,7 +752,7 @@ impl Client {
             })?;
 
             match resp {
-                Response::Ok(OkResponse::Order { statuses }) => Ok(statuses),
+                Response::Ok(OkResponse::Cancel { statuses }) => Ok(statuses),
                 Response::Err(err) => Err(ActionError { ids: oids, err }),
                 _ => Err(ActionError {
                     ids: oids,
@@ -1266,7 +1266,10 @@ impl Client {
                 .send()
                 .await?
                 .json()
+                // .text()
                 .await?;
+            // println!("<< {res}");
+            // Ok(serde_json::from_str(&res).unwrap())
             Ok(res)
         }
     }

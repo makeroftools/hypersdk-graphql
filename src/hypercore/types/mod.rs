@@ -1598,6 +1598,7 @@ pub struct BatchModify {
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Modify {
+    #[serde(with = "either::serde_untagged")]
     pub oid: OidOrCloid,
     pub order: OrderRequest,
 }
@@ -1627,7 +1628,7 @@ pub struct BatchCancelCloid {
 #[serde(rename_all = "camelCase")]
 pub struct Cancel {
     #[serde(rename = "a")]
-    pub asset: u32,
+    pub asset: usize,
     #[serde(rename = "o")]
     pub oid: u64,
 }
