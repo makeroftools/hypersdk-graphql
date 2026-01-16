@@ -1510,7 +1510,7 @@ struct EvmContract {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::{collections::HashMap, sync::Arc, thread};
 
     use alloy::primitives::address;
 
@@ -1627,5 +1627,106 @@ mod tests {
 
         // Should have spot markets
         assert!(!spots.is_empty());
+    }
+
+    #[test]
+    fn test_nonce_handler_uniqueness_single_thread() {
+        let handler = NonceHandler::default();
+        let mut nonces = std::collections::HashSet::new();
+
+        for _ in 0..10_000 {
+            let nonce = handler.next();
+            assert!(nonces.insert(nonce), "Duplicate nonce detected: {nonce}");
+        }
+    }
+
+    #[test]
+    fn test_nonce_handler_uniqueness_concurrent() {
+        let handler = Arc::new(NonceHandler::default());
+        let num_threads = 32;
+        let nonces_per_thread = 1_000_000;
+
+        let barrier = Arc::new(std::sync::Barrier::new(num_threads));
+
+        let handles: Vec<_> = (0..num_threads)
+            .map(|_| {
+                let handler = Arc::clone(&handler);
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    let mut nonces = Vec::with_capacity(nonces_per_thread);
+                    for _ in 0..nonces_per_thread {
+                        nonces.push(handler.next());
+                    }
+                    nonces
+                })
+            })
+            .collect();
+
+        let mut all_nonces = std::collections::HashSet::new();
+        for handle in handles {
+            let nonces = handle.join().unwrap();
+            for nonce in nonces {
+                assert!(
+                    all_nonces.insert(nonce),
+                    "Duplicate nonce detected in concurrent test: {nonce}"
+                );
+            }
+        }
+
+        assert_eq!(all_nonces.len(), num_threads * nonces_per_thread);
+    }
+
+    #[test]
+    fn test_nonce_handler_stale_nonce_race_condition() {
+        // This test specifically targets the race condition when nonce falls behind.
+        // We simulate this by creating a handler with an artificially old nonce.
+        use std::sync::atomic::Ordering;
+
+        let handler = Arc::new(NonceHandler::default());
+
+        // Set nonce to a value far in the past to trigger the reset branch
+        let old_nonce = 1000u64;
+        handler.nonce.store(old_nonce, Ordering::SeqCst);
+
+        let num_threads = 16;
+        let nonces_per_thread = 1000;
+
+        // Use a barrier to ensure all threads start at roughly the same time
+        let barrier = Arc::new(std::sync::Barrier::new(num_threads));
+
+        let handles: Vec<_> = (0..num_threads)
+            .map(|_| {
+                let handler = Arc::clone(&handler);
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    let mut nonces = Vec::with_capacity(nonces_per_thread);
+                    for _ in 0..nonces_per_thread {
+                        nonces.push(handler.next());
+                    }
+                    nonces
+                })
+            })
+            .collect();
+
+        let mut all_nonces = std::collections::HashSet::new();
+        let mut duplicates = Vec::new();
+
+        for handle in handles {
+            let nonces = handle.join().unwrap();
+            for nonce in nonces {
+                if !all_nonces.insert(nonce) {
+                    duplicates.push(nonce);
+                }
+            }
+        }
+
+        assert!(
+            duplicates.is_empty(),
+            "Found {} duplicate nonces when triggering stale nonce reset: {:?}",
+            duplicates.len(),
+            &duplicates[..duplicates.len().min(10)]
+        );
     }
 }
