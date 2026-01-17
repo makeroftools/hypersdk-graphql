@@ -1,6 +1,8 @@
+pub mod schema;
+
 use std::error::Error;
 
-use async_graphql::{http::GraphiQLSource, EmptyMutation, EmptySubscription, Object, Schema };
+use async_graphql::{http::GraphiQLSource, EmptyMutation, EmptySubscription, Schema };
 use async_graphql_axum::GraphQL;
 use axum::{
     Router,
@@ -10,15 +12,8 @@ use axum::{
 
 use tokio::net::TcpListener;
 
+use schema::Query;
 
-struct Query;
-
-#[Object]
-impl Query {
-    async fn howdy(&self) -> &'static str {
-        "partner"
-    }
-}
 
 async fn graphiql() -> impl IntoResponse {
     // Html(GraphiQLSource::build().finish())
