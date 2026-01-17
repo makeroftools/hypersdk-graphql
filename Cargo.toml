@@ -163,12 +163,20 @@ rust_decimal = { version = "1.39", features = ["macros", "maths", "serde", "serd
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_with = { version = "3", default-features = false, features = ["std"] }
-tokio = { version = "1", default-features = false, features = ["test-util", "time"] }
+
+# FIXME: Temporary feature set, `macros` and `rt-multi-thread` are from async-graphql dependencies
+#           and need to be triggered off of a "graphql" feature below..
+tokio = { version = "1", default-features = false, features = ["test-util", "time", "macros", "rt-multi-thread"] }
 url = "2"
 yawc = { version = "0.2", features = ["json", "logging", "simd"] }
 hex-literal = "0.4"
 chrono = { version = "0.4", features = ["now"] }
 num-traits = "0.2"
+
+# FIXME: These need to eventually be optional and set as a feature
+async-graphql = "7.0.16"
+async-graphql-axum = "7.2.0"
+axum = "0.8.8"
 
 ## Development and test dependencies
 [dev-dependencies]
