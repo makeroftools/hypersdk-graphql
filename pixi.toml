@@ -1,0 +1,11 @@
+[workspace]
+authors = ["Peter Alexander <makeroftools@creativedevelopment.systems>"]
+channels = ["conda-forge"]
+name = "hypersdk-graphql"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+rust = ">=1.92.0,<1.93"

@@ -2,3 +2,6 @@ target
 .env
 /Cargo.lock
 *.json
+# pixi environments
+.pixi/*
+!.pixi/config.toml
