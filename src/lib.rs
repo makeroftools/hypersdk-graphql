@@ -213,6 +213,7 @@
 
 pub mod hypercore;
 pub mod hyperevm;
+pub mod graphql;
 
 /// Re-exported Ethereum address type from Alloy.
 ///
