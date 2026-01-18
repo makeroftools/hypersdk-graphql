@@ -9,3 +9,7 @@ version = "0.1.0"
 
 [dependencies]
 rust = ">=1.92.0,<1.93"
+# rust = "==1.85.0"
+
+[activation]
+env = { RUSTFLAGS = "-C linker=clang" }

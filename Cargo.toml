@@ -11,7 +11,9 @@ homepage = "https://github.com/infinitefield/hypersdk"
 readme = "README.md"
 keywords = ["hyperliquid", "sdk", "trading", "dex", "perps"]
 documentation = "https://docs.rs/hypersdk"
-rust-version = "1.85.0"
+# rust-version = "1.85.0"
+# rust = ">=1.92.0,<1.93"
+
 
 include = [
   "abi/**",
@@ -147,6 +149,12 @@ path = "examples/uniswap/prjx_flows.rs"
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
+
+## FIXME: MOVE TO BETTER LOCATION
+# [target.x86_64-unknown-linux-gnu]
+# linker = "clang"
+# rustflags = ["-C", "link-arg=-fuse-ld=lld", "-C", "target-feature=+crt-static"]
+
 
 ## Runtime dependencies
 [dependencies]

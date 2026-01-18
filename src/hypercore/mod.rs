@@ -100,6 +100,7 @@ use alloy::{
     primitives::{B128, U256, address},
 };
 use anyhow::Context;
+use async_graphql::{ComplexObject, Enum, SimpleObject};
 use chrono::Utc;
 use either::Either;
 /// Re-export error types.
@@ -554,6 +555,8 @@ pub fn testnet_ws() -> WebSocket {
 ///
 /// See: <https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/tick-and-lot-size>
 #[derive(Debug, Clone, Copy)]
+// FIXME: cfg_attr needed
+#[derive(SimpleObject)]
 pub struct PriceTick {
     /// Maximum decimal places allowed for this market.
     /// - Spot: max_decimals = 8 - sz_decimals
@@ -715,6 +718,9 @@ fn build_perp_price_ticks(sz_decimals: i64) -> PriceTick {
 /// # }
 /// ```
 #[derive(Debug, Clone)]
+// FIXME: THIS NEEDS TO BE SET WITH cfg_attr
+#[derive(SimpleObject)]
+#[graphql(complex)]
 pub struct PerpMarket {
     /// Market name (e.g., "BTC", "ETH")
     pub name: String,
@@ -734,6 +740,7 @@ pub struct PerpMarket {
     pub table: PriceTick,
 }
 
+#[ComplexObject]
 impl PerpMarket {
     /// Returns the market symbol (same as name for perps).
     #[must_use]
@@ -1060,6 +1067,9 @@ mod tick_tests {
 /// # }
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// FIXME: cfg_attr needed
+#[derive(SimpleObject)]
+#[graphql(complex)]
 pub struct SpotToken {
     /// Token name (e.g., "USDC", "BTC", "PURR")
     pub name: String,
@@ -1087,6 +1097,7 @@ pub struct SpotToken {
     pub evm_extra_decimals: i64,
 }
 
+#[ComplexObject]
 impl SpotToken {
     /// Converts a decimal amount to wei representation.
     ///
@@ -1428,6 +1439,8 @@ struct PerpUniverseItem {
 
 #[derive(Debug, Copy, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+// FIXME: cfg_attr needed
+#[derive(Enum, Eq, PartialEq)]
 pub enum MarginMode {
     StrictIsolated,
 }
