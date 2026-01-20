@@ -143,6 +143,14 @@ path = "examples/uniswap/pools_created.rs"
 name = "uniswap_prjx_flows"
 path = "examples/uniswap/prjx_flows.rs"
 
+[[example]]
+name = "portfolio_manager"
+path = "examples/mytrade/portfolio_manager.rs"
+
+[[example]]
+name = "scanner"
+path = "examples/mytrade/scanner.rs"
+
 ## Documentation (docs.rs) configuration
 [package.metadata.docs.rs]
 all-features = true
